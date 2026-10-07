@@ -18,7 +18,8 @@ import type { RenderDiagnostics } from "./compositor";
 import type { ForegroundMask } from "./foreground-mask";
 import { colorFromHex, colorToHex, defaultChromaKeySettings } from "./chroma-key";
 import { Ball } from "./ball";
-import { drawBall } from "./ball-view";
+import { BALL_PROFILES } from "./ball-profiles";
+import { drawBall, drawBallAppearance } from "./ball-view";
 import type { CameraRect } from "./compositor-layout";
 
 const cameraButton = getElement<HTMLButtonElement>("camera-button");
@@ -60,8 +61,37 @@ const ballStatus = getElement<HTMLElement>("ball-status");
 const ballDiagnostics = getElement<HTMLElement>("ball-diagnostics");
 const resetBall = getElement<HTMLButtonElement>("reset-ball");
 const placeBall = getElement<HTMLButtonElement>("place-ball");
+const ballPicker = getElement<HTMLElement>("ball-picker");
+const ballHelp = getElement<HTMLElement>("ball-help");
 let placingBall = false;
 let lastBallDiagnostics = 0;
+
+for (const profile of BALL_PROFILES) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "ball-card";
+  button.dataset.ballType = profile.id;
+  button.setAttribute("aria-pressed", String(profile.id === ball.profile.id));
+  button.setAttribute("aria-label", profile.label);
+  const icon = document.createElement("canvas");
+  icon.width = icon.height = 64;
+  icon.setAttribute("aria-hidden", "true");
+  const ctx = icon.getContext("2d");
+  if (ctx) drawBallAppearance(ctx, profile, 32, 30, 23);
+  const label = document.createElement("span");
+  label.textContent = profile.label;
+  const hint = document.createElement("small");
+  hint.textContent = profile.hint;
+  button.append(icon, label, hint);
+  button.addEventListener("click", () => {
+    ball.setType(profile.id);
+    ballHelp.textContent = profile.description;
+    for (const choice of ballPicker.querySelectorAll("button")) choice.setAttribute("aria-pressed", String(choice === button));
+    setPlacingBall(false);
+  });
+  ballPicker.append(button);
+}
+ballHelp.textContent = ball.profile.description;
 
 function setPlacingBall(value: boolean): void {
   placingBall = value;
@@ -80,7 +110,8 @@ function updateBallControls(): void {
     : !sensingEnabled.checked ? "Turn on Sense foreground in Interaction check to play."
     : !ball.debug.fresh ? "Waiting for fresh camera input…"
     : "Nudge the ball with a toy or hand. Reset brings it back to the middle.";
-  if (ballStatus.textContent !== message) ballStatus.textContent = message;
+  const status = `${ball.profile.label} · ${message}`;
+  if (ballStatus.textContent !== status) ballStatus.textContent = status;
 }
 
 function updateBall(now: number, width: number, height: number, rect: CameraRect): void {
@@ -94,7 +125,8 @@ function updateBall(now: number, width: number, height: number, rect: CameraRect
   if (ballDebug.checked && now - lastBallDiagnostics >= 100) {
     lastBallDiagnostics = now;
     const d = ball.debug;
-    ballDiagnostics.textContent = `${d.fresh ? d.contact ? "Contact" : "Clear" : "Paused"} · ${(d.coverage * 100).toFixed(0)}% overlap · ${(d.changed * 100).toFixed(0)}% changed · toy ${d.motion ? Math.hypot(d.motion.x, d.motion.y).toFixed(2) : "—"} /s · hit ${Math.hypot(d.impulse.x, d.impulse.y).toFixed(2)} · ${d.hits} hits`;
+    const state = ball.profile.bounds === "contained" ? "No gravity" : ball.grounded ? "Grounded" : ball.aboveStage ? "Above stage" : "Airborne";
+    ballDiagnostics.textContent = `${ball.profile.label} · ${state} · velocity (${ball.vx.toFixed(2)}, ${ball.vy.toFixed(2)}) /s · ${d.fresh ? d.contact ? "Contact" : "Clear" : "Paused"} · ${(d.coverage * 100).toFixed(0)}% overlap · ${(d.changed * 100).toFixed(0)}% changed · toy ${d.motion ? Math.hypot(d.motion.x, d.motion.y).toFixed(2) : "—"} /s · hit ${Math.hypot(d.impulse.x, d.impulse.y).toFixed(2)} · ${d.hits} hits`;
   }
 }
 
@@ -127,7 +159,7 @@ function updateMask(mask: ForegroundMask): void {
   if (mask.timestamp === null) {
     ball.pause();
     ballOverlay.hidden = true;
-    if (ballDebug.checked) ballDiagnostics.textContent = `Paused · ${ball.debug.hits} hits`;
+    if (ballDebug.checked) ballDiagnostics.textContent = `${ball.profile.label} · Paused · ${ball.debug.hits} hits`;
     sensingContext?.clearRect(0, 0, sensingOverlay.width, sensingOverlay.height);
     maskImage = null;
     sensingCoverage.textContent = "—";

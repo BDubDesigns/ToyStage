@@ -79,6 +79,14 @@ h1 { margin-bottom: 0; font-size: clamp(22px, 3vw, 30px); font-weight: 700; lett
 .ball-panel h2 { margin: 0; font-size: 17px; letter-spacing: -.025em; }
 .ball-controls { display: flex; flex-wrap: wrap; gap: 10px; }
 .ball-controls .button { min-height: 44px; }
+.ball-picker { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+.ball-card { display: flex; min-width: 0; min-height: 100px; flex-direction: column; align-items: center; gap: 4px; padding: 8px 5px; border: 2px solid transparent; border-radius: 10px; color: #d8e1dd; background: var(--surface-raised); cursor: pointer; }
+.ball-card canvas { width: 44px; height: 44px; }
+.ball-card span { font-size: 11px; font-weight: 800; }
+.ball-card small { color: var(--muted); font-size: 10px; }
+.ball-card[aria-pressed="true"] { border-color: var(--lime); color: var(--lime); background: #283326; }
+.ball-card:hover { background: #303d37; }
+@media (max-width: 1050px) { .ball-picker { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .stage-canvas.placing { cursor: crosshair; }
 @media (max-width: 440px) { .ball-panel { padding: 13px; } }
 .sensing-panel { margin-top: 18px; border-top: 1px solid var(--stroke); padding-top: 16px; }
