@@ -34,7 +34,8 @@
           </div>
 
           <div class="stage-frame" id="stage-frame">
-            <video id="stage-video" class="stage-video" autoplay muted playsinline hidden aria-label="Live camera preview"></video>
+            <video id="stage-video" autoplay muted playsinline hidden aria-hidden="true"></video>
+            <canvas id="stage-canvas" class="stage-canvas" hidden role="img" aria-label="Live camera composited over a test background"></canvas>
             <div id="empty-state" class="empty-state">
               <div class="camera-glyph" aria-hidden="true">
                 <svg viewBox="0 0 48 40" fill="none">
@@ -52,7 +53,7 @@
             </div>
           </div>
 
-          <p class="stage-caption">Set up your play area in front of the camera. Chroma keying and digital scenes are coming next.</p>
+          <p class="stage-caption">The full camera frame sits over a test grid. Green-screen removal and scene selection are coming next.</p>
         </section>
 
         <aside class="diagnostics" aria-labelledby="diagnostics-heading">
@@ -70,8 +71,28 @@
               <dd id="video-size">Waiting for camera</dd>
             </div>
             <div class="diagnostic-row">
-              <dt>Frame rate</dt>
+              <dt>Camera reported rate</dt>
               <dd id="frame-rate">—</dd>
+            </div>
+            <div class="diagnostic-row">
+              <dt>Rendered frame rate</dt>
+              <dd id="render-rate">—</dd>
+            </div>
+            <div class="diagnostic-row">
+              <dt>Frame interval (average)</dt>
+              <dd id="frame-time">—</dd>
+            </div>
+            <div class="diagnostic-row">
+              <dt>CPU submission (average)</dt>
+              <dd id="submission-time">—</dd>
+            </div>
+            <div class="diagnostic-row">
+              <dt>Render size</dt>
+              <dd id="render-size">—</dd>
+            </div>
+            <div class="diagnostic-row">
+              <dt>Camera view</dt>
+              <dd id="camera-view">—</dd>
             </div>
             <div class="diagnostic-row">
               <dt>Selected camera</dt>
