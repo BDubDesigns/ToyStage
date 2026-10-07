@@ -95,6 +95,12 @@ h1 { margin-bottom: 0; font-size: clamp(22px, 3vw, 30px); font-weight: 700; lett
 .live-overlay > span:first-child { display: inline-flex; align-items: center; gap: 7px; }
 .stage-caption { margin: 12px 2px 0; color: #7f8e8e; font-size: 10px; line-height: 1.5; }
 .stage-canvas.sampling { cursor: crosshair; }
+.camera-switcher { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.camera-switcher .button, .camera-select-label select { min-height: 44px; }
+.camera-select-label { display: inline-flex; align-items: center; gap: 8px; color: #aab5b2; font-size: 11px; }
+.camera-select-label select { max-width: min(62vw, 360px); min-width: 150px; border: 1px solid var(--stroke); border-radius: 8px; padding: 0 32px 0 11px; color: #edf2ef; background: var(--surface); font: inherit; }
+#camera-switch-status { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+#camera-switch-status[data-error="true"] { color: #ffb3a8; }
 .key-panel { margin-top: 18px; padding: 18px; border: 1px solid var(--stroke); border-radius: 12px; background: var(--surface); }
 .key-heading-row, .calibration-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 14px; }
 .key-heading-row h2 { margin: 0; font-size: 17px; letter-spacing: -.025em; }

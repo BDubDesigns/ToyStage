@@ -2,13 +2,17 @@ import "./styles.css";
 import { SCENES, SceneImages } from "./scenes";
 import type { Scene } from "./scenes";
 import {
+  chooseNextCamera,
+  getCameraChoices,
   getCameraErrorMessage,
+  getCameraFacingMode,
   getUnsupportedCameraMessage,
   isCameraApiAvailable,
   requestCamera,
   shouldMirrorPreview,
   supportsWebGL2,
 } from "./camera";
+import type { CameraDeviceChoice } from "./camera";
 import { WebGLCompositor } from "./compositor";
 import type { RenderDiagnostics } from "./compositor";
 import type { ForegroundMask } from "./foreground-mask";
@@ -34,11 +38,19 @@ const frameTime = getElement<HTMLElement>("frame-time");
 const submissionTime = getElement<HTMLElement>("submission-time");
 const renderSize = getElement<HTMLElement>("render-size");
 const cameraView = getElement<HTMLElement>("camera-view");
+const cameraSwitcher = getElement<HTMLElement>("camera-switcher");
+const switchCameraButton = getElement<HTMLButtonElement>("switch-camera");
+const cameraSelect = getElement<HTMLSelectElement>("camera-select");
+const cameraSwitchStatus = getElement<HTMLElement>("camera-switch-status");
 
 let activeStream: MediaStream | null = null;
 let renderer: WebGLCompositor | null = null;
 let session: AbortController | null = null;
 let removeTrackListener: (() => void) | null = null;
+let cameraChoices: CameraDeviceChoice[] = [];
+let selectedCameraDeviceId: string | undefined;
+let cameraSwitchInProgress = false;
+let deviceChangeListener: (() => void) | null = null;
 
 const ball = new Ball();
 const ballEnabled = getElement<HTMLInputElement>("ball-enabled");
@@ -320,22 +332,29 @@ cameraButton.addEventListener("click", () => {
   void startCamera();
 });
 
-async function startCamera(): Promise<void> {
-  const attempt = new AbortController();
-  session = attempt;
-  setState("requesting", "Requesting access");
-  cameraButton.disabled = true;
-  cameraButton.textContent = "Requesting…";
-  emptyTitle.textContent = "Waiting for permission";
-  stageMessage.textContent = "Allow camera access in your browser to show the live stage.";
-  stageMessage.removeAttribute("data-error");
+switchCameraButton.addEventListener("click", () => {
+  const track = activeStream?.getVideoTracks()[0];
+  const choice = chooseNextCamera(cameraChoices, selectedCameraDeviceId, track ? getCameraFacingMode(track) : undefined);
+  if (choice) void switchCamera(choice.deviceId);
+});
+cameraSelect.addEventListener("change", () => {
+  const deviceId = cameraSelect.value;
+  if (deviceId && deviceId !== selectedCameraDeviceId) void switchCamera(deviceId);
+});
 
+if (navigator.mediaDevices?.addEventListener) {
+  const onDeviceChange = () => { void refreshCameraChoices(); };
+  navigator.mediaDevices.addEventListener("devicechange", onDeviceChange);
+  deviceChangeListener = () => navigator.mediaDevices.removeEventListener("devicechange", onDeviceChange);
+}
+
+async function startCamera(): Promise<void> {
   if (!isCameraApiAvailable(navigator.mediaDevices)) {
     releaseStream();
     showFailure(new Error("Camera API unavailable"), !window.isSecureContext);
     return;
   }
-
+  const attempt = beginCameraRequest("Requesting access", "Waiting for permission", "Allow camera access in your browser to show the live stage.");
   let stream: MediaStream | null = null;
   let renderingError = false;
   try {
@@ -347,63 +366,157 @@ async function startCamera(): Promise<void> {
       stream.getTracks().forEach((track) => track.stop());
       return;
     }
-    const track = stream.getVideoTracks()[0];
-    if (!track) {
-      throw new Error("Camera stream did not include a video track");
-    }
-
-    activeStream = stream;
-    video.srcObject = stream;
-    await waitForMetadata(video, attempt.signal);
-    await video.play();
-    if (attempt.signal.aborted) return;
-
     renderingError = true;
-    renderer = new WebGLCompositor(canvas, video, {
-      mirrored: shouldMirrorPreview(track.getSettings().facingMode),
-      onDiagnostics: updateRenderDiagnostics,
-      onMask: updateMask,
-      onFrame: updateBall,
-      onError: (error) => {
-        releaseStream();
-        showFailure(error, false, true);
-      },
-    });
-    if (selectedScene.kind === "animated" || selectedImage) renderer.setScene(selectedScene, selectedImage);
-    renderer.setSceneMotion(sceneMotion.checked);
-    renderer.setSensingEnabled(sensingEnabled.checked);
-    ball.reset();
-    renderer.start();
-    applyKeySettings();
-    sampleButton.disabled = false;
-    setSampling(false);
-    canvas.hidden = false;
-    emptyState.hidden = true;
-    liveOverlay.hidden = false;
-    updateDiagnostics(track);
-    setState("live", "Camera live");
-    cameraButton.disabled = false;
-    cameraButton.textContent = "Stop camera";
-
-    const onEnded = () => {
-      if (activeStream !== stream) {
-        return;
-      }
-      releaseStream();
-      showFailure(new DOMException("Camera track ended", "NotReadableError"));
-    };
-    track.addEventListener("ended", onEnded, { once: true });
-    removeTrackListener = () => track.removeEventListener("ended", onEnded);
+    await attachCameraStream(stream, attempt);
   } catch (error) {
-    stream?.getTracks().forEach((track) => track.stop());
+    if (stream && activeStream !== stream) stream.getTracks().forEach((track) => track.stop());
     if (attempt.signal.aborted) return;
     releaseStream();
     showFailure(error, false, renderingError || !webglAvailable);
   }
 }
 
+function beginCameraRequest(label: string, title: string, message: string): AbortController {
+  const attempt = new AbortController();
+  session = attempt;
+  setState("requesting", label);
+  cameraButton.disabled = true;
+  cameraButton.textContent = "Requesting…";
+  switchCameraButton.disabled = cameraSelect.disabled = true;
+  emptyTitle.textContent = title;
+  stageMessage.textContent = message;
+  stageMessage.removeAttribute("data-error");
+  return attempt;
+}
+
+async function attachCameraStream(stream: MediaStream, attempt: AbortController, requestedDeviceId?: string): Promise<void> {
+  const track = stream.getVideoTracks()[0];
+  if (!track) throw new Error("Camera stream did not include a video track");
+  activeStream = stream;
+  selectedCameraDeviceId = track.getSettings().deviceId || requestedDeviceId || cameraChoices.find((choice) => choice.label === track.label.trim())?.deviceId;
+  video.srcObject = stream;
+  await waitForMetadata(video, attempt.signal);
+  await video.play();
+  if (attempt.signal.aborted) return;
+
+  renderer = new WebGLCompositor(canvas, video, {
+    mirrored: shouldMirrorPreview(getCameraFacingMode(track)),
+    onDiagnostics: updateRenderDiagnostics,
+    onMask: updateMask,
+    onFrame: updateBall,
+    onError: (error) => {
+      releaseStream();
+      showFailure(error, false, true);
+    },
+  });
+  if (selectedScene.kind === "animated" || selectedImage) renderer.setScene(selectedScene, selectedImage);
+  renderer.setSceneMotion(sceneMotion.checked);
+  renderer.setSensingEnabled(sensingEnabled.checked);
+  ball.reset();
+  renderer.start();
+  applyKeySettings();
+  sampleButton.disabled = false;
+  setSampling(false);
+  canvas.hidden = false;
+  emptyState.hidden = true;
+  liveOverlay.hidden = false;
+  updateDiagnostics(track);
+  setState("live", "Camera live");
+  cameraButton.disabled = false;
+  cameraButton.textContent = "Stop camera";
+  cameraSwitchStatus.textContent = "";
+  const onEnded = () => {
+    if (activeStream !== stream) return;
+    releaseStream();
+    showFailure(new DOMException("Camera track ended", "NotReadableError"));
+  };
+  track.addEventListener("ended", onEnded, { once: true });
+  removeTrackListener = () => track.removeEventListener("ended", onEnded);
+  await refreshCameraChoices();
+}
+
+async function switchCamera(deviceId: string): Promise<void> {
+  if (!activeStream || cameraSwitchInProgress || !navigator.mediaDevices?.getUserMedia) return;
+  const oldDeviceId = getActiveCameraDeviceId();
+  if (!oldDeviceId || oldDeviceId === deviceId) return;
+  cameraSwitchInProgress = true;
+  switchCameraButton.disabled = cameraSelect.disabled = true;
+  cameraSwitchStatus.textContent = "Switching camera…";
+  cameraSwitchStatus.removeAttribute("data-error");
+  setSampling(false);
+  setPlacingBall(false);
+  releaseStream();
+  cameraSwitchStatus.textContent = "Switching camera…";
+  const attempt = beginCameraRequest("Switching camera", "Switching camera", "Starting the selected camera. Your scene and screen settings are staying in place.");
+  let targetStream: MediaStream | null = null;
+  try {
+    targetStream = await requestCamera(navigator.mediaDevices, deviceId);
+    if (attempt.signal.aborted) { targetStream.getTracks().forEach((track) => track.stop()); return; }
+    await attachCameraStream(targetStream, attempt, deviceId);
+    cameraSwitchStatus.textContent = "Camera changed. Check the screen color; this camera may need its own calibration.";
+  } catch (error) {
+    if (targetStream && activeStream !== targetStream) targetStream.getTracks().forEach((track) => track.stop());
+    if (attempt.signal.aborted) return;
+    releaseStream();
+    try {
+      const recoveryAttempt = beginCameraRequest("Restoring camera", "Restoring previous camera", "The selected camera could not start. Reconnecting to the previous camera.");
+      const recovered = await requestCamera(navigator.mediaDevices, oldDeviceId);
+      if (recoveryAttempt.signal.aborted) { recovered.getTracks().forEach((track) => track.stop()); return; }
+      await attachCameraStream(recovered, recoveryAttempt, oldDeviceId);
+      const failedLabel = cameraChoices.find((camera) => camera.deviceId === deviceId)?.label ?? "selected camera";
+      cameraSwitchStatus.dataset.error = "true";
+      cameraSwitchStatus.textContent = `Could not switch to ${failedLabel}. Your previous camera is back. ${getCameraErrorMessage(error)}`;
+    } catch {
+      releaseStream();
+      showFailure(error);
+      stageMessage.textContent = `Camera switch failed and the previous camera could not be restored. ${getCameraErrorMessage(error)} Use Try again to restart.`;
+    }
+  } finally {
+    cameraSwitchInProgress = false;
+    if (activeStream) switchCameraButton.disabled = cameraSelect.disabled = cameraChoices.length < 2;
+  }
+}
+
+async function refreshCameraChoices(): Promise<void> {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  try {
+    const choices = getCameraChoices(await navigator.mediaDevices.enumerateDevices());
+    cameraChoices = choices;
+    const currentId = getActiveCameraDeviceId();
+    if (currentId) selectedCameraDeviceId = currentId;
+    cameraSelect.replaceChildren();
+    for (const choice of choices) {
+      const option = document.createElement("option");
+      option.value = choice.deviceId;
+      option.textContent = `${choice.label}${choice.deviceId === currentId ? " · current" : ""}`;
+      cameraSelect.append(option);
+    }
+    if (currentId && !choices.some((choice) => choice.deviceId === currentId)) {
+      const current = document.createElement("option");
+      current.value = currentId;
+      current.textContent = `${activeStream?.getVideoTracks()[0]?.label.trim() || "Current camera"} · current`;
+      cameraSelect.prepend(current);
+    }
+    if (currentId) cameraSelect.value = currentId;
+    cameraSwitcher.hidden = choices.length < 2;
+    switchCameraButton.disabled = cameraSelect.disabled = choices.length < 2 || cameraSwitchInProgress;
+  } catch {
+    // Some browsers do not allow enumeration until permission is granted; the
+    // live stream remains usable and a later devicechange can refresh the list.
+    cameraChoices = [];
+    cameraSwitcher.hidden = true;
+  }
+}
+
+function getActiveCameraDeviceId(): string | undefined {
+  const track = activeStream?.getVideoTracks()[0];
+  return track?.getSettings().deviceId || selectedCameraDeviceId
+    || cameraChoices.find((choice) => choice.label === track?.label.trim())?.deviceId;
+}
+
 function stopCamera(): void {
   releaseStream();
+  cameraSwitcher.hidden = true;
   canvas.hidden = true;
   liveOverlay.hidden = true;
   emptyState.hidden = false;
@@ -428,6 +541,7 @@ function releaseStream(): void {
   renderer = null;
   const stream = activeStream;
   activeStream = null;
+  selectedCameraDeviceId = undefined;
   ball.reset();
   ballOverlay.hidden = true;
   setPlacingBall(false);
@@ -436,6 +550,11 @@ function releaseStream(): void {
   stream?.getTracks().forEach((track) => track.stop());
   video.pause();
   video.srcObject = null;
+  videoSize.textContent = "Waiting for camera";
+  frameRate.textContent = cameraName.textContent = "—";
+  resetRenderDiagnostics();
+  cameraSwitcher.hidden = true;
+  cameraSwitchStatus.textContent = "";
 }
 
 function showFailure(error: unknown, insecureContext = false, renderingError = false): void {
@@ -452,6 +571,7 @@ function showFailure(error: unknown, insecureContext = false, renderingError = f
   videoSize.textContent = "Waiting for camera";
   frameRate.textContent = "—";
   cameraName.textContent = "—";
+  cameraSwitcher.hidden = true;
   resetRenderDiagnostics();
   stageMessage.textContent = message;
   stageMessage.dataset.error = "true";
@@ -467,6 +587,7 @@ function updateDiagnostics(track: MediaStreamTrack): void {
     ? `${Math.round(settings.frameRate)} fps`
     : "Unavailable";
   cameraName.textContent = track.label.trim() || "Camera name hidden by browser";
+  cameraView.textContent = shouldMirrorPreview(getCameraFacingMode(track)) ? "Mirrored · fit whole frame" : "Unmirrored · fit whole frame";
 }
 
 function updateRenderDiagnostics(stats: RenderDiagnostics | null): void {
@@ -521,7 +642,11 @@ function waitForMetadata(element: HTMLVideoElement, signal: AbortSignal): Promis
 }
 
 // Release the camera and renderer on navigation, including entry to the back/forward cache.
-window.addEventListener("pagehide", stopCamera);
+window.addEventListener("pagehide", () => {
+  stopCamera();
+  deviceChangeListener?.();
+  deviceChangeListener = null;
+});
 
 function getBrowserName(): string {
   const userAgent = navigator.userAgent;

@@ -55,6 +55,14 @@
             </div>
           </div>
 
+          <div id="camera-switcher" class="camera-switcher" hidden>
+            <button id="switch-camera" class="button button-secondary" type="button" disabled aria-describedby="camera-switch-status">Switch camera</button>
+            <label class="camera-select-label">Camera
+              <select id="camera-select" aria-label="Choose camera" disabled></select>
+            </label>
+            <p id="camera-switch-status" role="status" aria-live="polite"></p>
+          </div>
+
           <section class="ball-panel" aria-labelledby="ball-heading">
             <div class="key-heading-row">
               <div><p class="eyebrow">TOY MEETS WORLD</p><h2 id="ball-heading">Give it a nudge</h2></div>
