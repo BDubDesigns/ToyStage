@@ -63,6 +63,23 @@ export class ForegroundMask {
     return occupied / ((bounds.right - bounds.left) * (bounds.bottom - bounds.top));
   }
 
+  // Ellipse in stage coordinates: separate radii keep a screen-space ball
+  // circular on any aspect. Scan only intersecting cells, without a mask copy.
+  contact(x: number, y: number, radiusX: number, radiusY: number): { coverage: number; centroid: { x: number; y: number } | null } {
+    const bounds = this.bounds({ x: x - radiusX, y: y - radiusY, width: radiusX * 2, height: radiusY * 2 });
+    if (!bounds || this.timestamp === null) return { coverage: 0, centroid: null };
+    let cells = 0, count = 0, sx = 0, sy = 0;
+    for (let row = bounds.top; row < bounds.bottom; row++) {
+      for (let col = bounds.left; col < bounds.right; col++) {
+        const px = (col + 0.5) / this.width, py = (row + 0.5) / this.height;
+        if (((px - x) / radiusX) ** 2 + ((py - y) / radiusY) ** 2 > 1) continue;
+        cells++;
+        if (this.current[row * this.width + col]) { count++; sx += px; sy += py; }
+      }
+    }
+    return { coverage: cells ? count / cells : 0, centroid: count ? { x: sx / count, y: sy / count } : null };
+  }
+
   motion(region: CameraRect = { x: 0, y: 0, width: 1, height: 1 }): MaskMotion {
     const bounds = this.bounds(region);
     if (!bounds || this.timestamp === null || this.previousTime === null) return { changed: 0, velocity: null, intervalMs: 0 };

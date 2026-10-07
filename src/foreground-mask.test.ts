@@ -39,6 +39,17 @@ describe("foreground sensing queries", () => {
     expect(mask.occupied(0, 0)).toBe(true);
   });
 
+  it("checks circular contact without counting square-corner false positives", () => {
+    const mask = new ForegroundMask();
+    mask.update(frame([[255, 0, 0, 255], [0, 255, 0, 0], [0, 0, 0, 0], [255, 0, 0, 255]]), 4, 4, 100);
+    expect(mask.contact(0.5, 0.5, 0.5, 0.5)).toEqual({ coverage: 1 / 12, centroid: { x: 0.375, y: 0.375 } });
+    expect(mask.contact(0.5, 0.5, -1, 0.5)).toEqual({ coverage: 0, centroid: null });
+    expect(mask.contact(NaN, 0.5, 0.5, 0.5)).toEqual({ coverage: 0, centroid: null });
+    expect(mask.contact(5, 5, 0.1, 0.1)).toEqual({ coverage: 0, centroid: null });
+    mask.reset();
+    expect(mask.contact(0.5, 0.5, 0.5, 0.5)).toEqual({ coverage: 0, centroid: null });
+  });
+
   it("reports change and centroid velocity in stage units per second", () => {
     const mask = new ForegroundMask();
     mask.update(frame([[255, 255, 0, 0], [0, 0, 0, 0]]), 4, 2, 100);
