@@ -9,6 +9,7 @@ import {
 } from "./camera";
 import { WebGLCompositor } from "./compositor";
 import type { RenderDiagnostics } from "./compositor";
+import { colorFromHex, colorToHex, defaultChromaKeySettings } from "./chroma-key";
 
 const cameraButton = getElement<HTMLButtonElement>("camera-button");
 const cameraState = getElement<HTMLElement>("camera-state");
@@ -32,6 +33,79 @@ let activeStream: MediaStream | null = null;
 let renderer: WebGLCompositor | null = null;
 let session: AbortController | null = null;
 let removeTrackListener: (() => void) | null = null;
+
+const keyEnabled = getElement<HTMLInputElement>("key-enabled");
+const keyColor = getElement<HTMLInputElement>("key-color");
+const tolerance = getElement<HTMLInputElement>("key-tolerance");
+const softness = getElement<HTMLInputElement>("key-softness");
+const despill = getElement<HTMLInputElement>("key-despill");
+const showMask = getElement<HTMLInputElement>("show-mask");
+const sampleButton = getElement<HTMLButtonElement>("sample-color");
+const calibrationStatus = getElement<HTMLElement>("calibration-status");
+let keySettings = defaultChromaKeySettings();
+let sampling = false;
+
+function applyKeySettings(): void {
+  renderer?.setChromaKey({ ...keySettings, enabled: keySettings.enabled && !sampling });
+  for (const [input, output] of [[tolerance, "tolerance-value"], [softness, "softness-value"], [despill, "despill-value"]] as const) {
+    getElement<HTMLOutputElement>(output).value = `${Math.round(Number(input.value) / Number(input.max) * 100)}%`;
+  }
+}
+
+function setSampling(value: boolean): void {
+  sampling = value;
+  sampleButton.textContent = value ? "Cancel color pick" : "Pick blanket color";
+  sampleButton.setAttribute("aria-pressed", String(value));
+  canvas.classList.toggle("sampling", value);
+  calibrationStatus.textContent = value ? "Original camera shown. Tap a clear patch of blanket in the preview. Escape cancels."
+    : activeStream ? "Pick again whenever lighting changes. Adjust the sliders to keep toys visible."
+      : "Start the camera to pick a color, or choose one with Screen color.";
+  applyKeySettings();
+}
+
+for (const input of [keyEnabled, keyColor, tolerance, softness, despill, showMask]) {
+  input.addEventListener("input", () => {
+    keySettings = { enabled: keyEnabled.checked, color: colorFromHex(keyColor.value), tolerance: Number(tolerance.value), softness: Number(softness.value), despill: Number(despill.value), showMask: showMask.checked };
+    if (input === keyColor && sampling) setSampling(false);
+    else applyKeySettings();
+  });
+}
+sampleButton.addEventListener("click", () => {
+  setSampling(!sampling);
+  if (sampling) canvas.scrollIntoView({ block: "center" });
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && sampling) setSampling(false);
+});
+canvas.addEventListener("click", (event) => {
+  if (!sampling || !renderer) return;
+  const bounds = canvas.getBoundingClientRect();
+  try {
+    const color = renderer.sampleColor((event.clientX - bounds.left) / bounds.width, (event.clientY - bounds.top) / bounds.height);
+    if (!color) {
+      calibrationStatus.textContent = "Tap inside the camera image, away from the grid border.";
+      return;
+    }
+    keySettings.color = color;
+    keyColor.value = colorToHex(color);
+    setSampling(false);
+    calibrationStatus.textContent = "Blanket color picked. Adjust Remove more blanket for shadows, then soften the edges.";
+  } catch (error) {
+    setSampling(false);
+    calibrationStatus.textContent = error instanceof Error ? error.message : "Could not pick a color. Use Screen color instead.";
+  }
+});
+getElement<HTMLButtonElement>("reset-key").addEventListener("click", () => {
+  keySettings = defaultChromaKeySettings();
+  keyEnabled.checked = keySettings.enabled;
+  keyColor.value = colorToHex(keySettings.color);
+  tolerance.value = String(keySettings.tolerance);
+  softness.value = String(keySettings.softness);
+  despill.value = String(keySettings.despill);
+  showMask.checked = keySettings.showMask;
+  setSampling(false);
+});
+applyKeySettings();
 
 getElement<HTMLElement>("browser-name").textContent = getBrowserName();
 const webglAvailable = supportsWebGL2();
@@ -94,6 +168,9 @@ async function startCamera(): Promise<void> {
       },
     });
     renderer.start();
+    applyKeySettings();
+    sampleButton.disabled = false;
+    setSampling(false);
     canvas.hidden = false;
     emptyState.hidden = true;
     liveOverlay.hidden = false;
@@ -145,6 +222,8 @@ function releaseStream(): void {
   renderer = null;
   const stream = activeStream;
   activeStream = null;
+  sampleButton.disabled = true;
+  setSampling(false);
   stream?.getTracks().forEach((track) => track.stop());
   video.pause();
   video.srcObject = null;
