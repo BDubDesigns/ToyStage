@@ -2,6 +2,9 @@ import { getCameraRect, getRenderSize } from "./compositor-layout";
 import { defaultChromaKeySettings, getSamplePoint, sampleVideoColor } from "./chroma-key";
 import type { ChromaKeySettings, RGB } from "./chroma-key";
 import { CAMERA_FRAGMENT } from "./chroma-key-shader";
+import { SCENE_FRAGMENT } from "./scene-shader";
+import { getSceneUvScale } from "./scenes";
+import type { Scene } from "./scenes";
 
 export interface RenderDiagnostics {
   fps: number;
@@ -29,18 +32,6 @@ void main() {
   gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
-const BACKGROUND = `#version 300 es
-precision mediump float;
-in vec2 v_uv;
-uniform vec2 u_size;
-out vec4 color;
-void main() {
-  vec2 cell = fract(v_uv * u_size / 48.0);
-  float grid = max(step(0.97, cell.x), step(0.97, cell.y));
-  vec3 base = mix(vec3(0.055, 0.09, 0.12), vec3(0.12, 0.22, 0.23), v_uv.y);
-  color = vec4(mix(base, vec3(0.28, 0.38, 0.29), grid * 0.55), 1.0);
-}`;
-
 const FRAME_INTERVAL = 1000 / 30;
 
 export class WebGLCompositor {
@@ -50,6 +41,14 @@ export class WebGLCompositor {
   private texture: WebGLTexture | null = null;
   private vao: WebGLVertexArrayObject | null = null;
   private sizeUniform: WebGLUniformLocation | null = null;
+  private sceneTexture: WebGLTexture | null = null;
+  private sceneUniforms: Record<string, WebGLUniformLocation | null> = {};
+  private sceneImage: HTMLImageElement | null = null;
+  private sceneDirty = false;
+  private animatedScene = true;
+  private sceneMotion = true;
+  private sceneTime = 0;
+  private lastAnimationFrame = 0;
   private rectUniform: WebGLUniformLocation | null = null;
   private keySettings = defaultChromaKeySettings();
   private keyUniforms: Record<string, WebGLUniformLocation | null> = {};
@@ -75,6 +74,17 @@ export class WebGLCompositor {
 
   setChromaKey(settings: ChromaKeySettings): void {
     this.keySettings = { ...settings, color: [...settings.color] };
+  }
+
+  setScene(scene: Scene, image: HTMLImageElement | null): void {
+    this.animatedScene = scene.kind === "animated";
+    this.sceneImage = image;
+    this.sceneDirty = image !== null;
+    this.sceneTime = 0;
+  }
+
+  setSceneMotion(enabled: boolean): void {
+    this.sceneMotion = enabled;
   }
 
   sampleColor(x: number, y: number): RGB | null {
@@ -115,6 +125,9 @@ export class WebGLCompositor {
     gl.bindTexture(gl.TEXTURE_2D, null);
     gl.useProgram(null);
     gl.deleteTexture(this.texture);
+    gl.deleteTexture(this.sceneTexture);
+    this.sceneTexture = null;
+    this.sceneUniforms = {};
     gl.deleteVertexArray(this.vao);
     gl.deleteProgram(this.background);
     gl.deleteProgram(this.camera);
@@ -136,11 +149,12 @@ export class WebGLCompositor {
 
   private createResources(): void {
     const gl = this.gl;
-    this.background = createProgram(gl, BACKGROUND);
+    this.background = createProgram(gl, SCENE_FRAGMENT);
     this.camera = createProgram(gl, CAMERA_FRAGMENT);
     this.texture = gl.createTexture();
+    this.sceneTexture = gl.createTexture();
     this.vao = gl.createVertexArray();
-    if (!this.texture || !this.vao) throw new Error("The graphics renderer could not allocate its resources.");
+    if (!this.texture || !this.sceneTexture || !this.vao) throw new Error("The graphics renderer could not allocate its resources.");
     gl.bindVertexArray(this.vao);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
@@ -149,7 +163,22 @@ export class WebGLCompositor {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.sceneTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    // Keep the sampler complete even before a still has loaded.
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([5, 8, 22, 255]));
+    this.sceneDirty = this.sceneImage !== null;
     this.sizeUniform = gl.getUniformLocation(this.background, "u_size");
+    for (const name of ["scene", "uvScale", "animated", "time"]) {
+      this.sceneUniforms[name] = gl.getUniformLocation(this.background, `u_${name}`);
+    }
+    gl.useProgram(this.background);
+    gl.uniform1i(this.sceneUniforms.scene, 1);
+    gl.activeTexture(gl.TEXTURE0);
     this.rectUniform = gl.getUniformLocation(this.camera, "u_rect");
     for (const name of ["keyEnabled", "keyColor", "tolerance", "softness", "despill", "showMask"]) {
       this.keyUniforms[name] = gl.getUniformLocation(this.camera, `u_${name}`);
@@ -171,6 +200,7 @@ export class WebGLCompositor {
 
   private resume(): void {
     this.lastScheduled = 0;
+    this.lastAnimationFrame = 0;
     this.lastVideoTime = -1;
     this.statsStart = performance.now();
     this.previousFrame = 0;
@@ -200,6 +230,10 @@ export class WebGLCompositor {
   private readonly tick = (now: number): void => {
     this.animationId = null;
     if (!this.running || document.hidden) return;
+    if (this.lastAnimationFrame && this.animatedScene && this.sceneMotion) {
+      this.sceneTime += Math.min(now - this.lastAnimationFrame, 100) / 1000;
+    }
+    this.lastAnimationFrame = now;
     const elapsed = now - this.lastScheduled;
     if (elapsed >= FRAME_INTERVAL - 0.5) {
       this.lastScheduled = now - (elapsed >= FRAME_INTERVAL ? elapsed % FRAME_INTERVAL : 0);
@@ -238,6 +272,7 @@ export class WebGLCompositor {
     const width = this.video.videoWidth;
     const height = this.video.videoHeight;
     gl.bindVertexArray(this.vao);
+    gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     if (width !== this.textureWidth || height !== this.textureHeight) {
       // Upload directly from the DOM video source, with no CPU pixel readback.
@@ -249,11 +284,22 @@ export class WebGLCompositor {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
       this.lastVideoTime = this.video.currentTime;
     }
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.sceneTexture);
+    if (this.sceneDirty && this.sceneImage) {
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.sceneImage);
+      this.sceneDirty = false;
+    }
     gl.disable(gl.BLEND);
     gl.useProgram(this.background);
     gl.uniform2f(this.sizeUniform, this.canvas.width, this.canvas.height);
+    const uvScale = this.sceneImage ? getSceneUvScale(this.canvas.width, this.canvas.height, this.sceneImage.naturalWidth, this.sceneImage.naturalHeight) : [1, 1];
+    gl.uniform2f(this.sceneUniforms.uvScale, uvScale[0], uvScale[1]);
+    gl.uniform1i(this.sceneUniforms.animated, this.animatedScene ? 1 : 0);
+    gl.uniform1f(this.sceneUniforms.time, this.sceneTime);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     const rect = getCameraRect(this.canvas.width, this.canvas.height, width, height);
+    gl.activeTexture(gl.TEXTURE0);
     gl.useProgram(this.camera);
     gl.uniform4f(this.rectUniform, rect.x, rect.y, rect.width, rect.height);
     const key = this.keySettings;
