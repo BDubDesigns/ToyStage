@@ -29,6 +29,8 @@ The diagnostics panel reports the camera's decoded size, reported frame rate and
 
 The rear camera is preferred where the browser supports facing-mode selection. User-facing previews are mirrored in the shader; environment-facing and unknown-facing previews are not. Video orientation comes from the browser's decoded `videoWidth`/`videoHeight`, including changes on rotation. The whole frame fits without cropping or stretching, inset over the selected scene. The green screen becomes transparent to reveal the scene.
 
+After camera permission is granted, **Switch camera** cycles through available cameras and the **Camera** menu can select a particular device or lens. Browser-provided names are shown when available; otherwise devices use a simple session order. Switching releases the current stream before requesting its replacement, then rebuilds the renderer so mirroring, sizing, sensing, and diagnostics match the new camera. Scene, animation, ball-play, and chroma-key choices remain in page memory. Camera exposure and color can differ, so check the key and pick the blanket color again if needed; switching never changes that color automatically. If the new camera cannot start, ToyStage tries to reconnect to the previous camera and reports the failure.
+
 The compositor targets 30 rendered frames per second, with a drawing buffer bounded to 1280×720 or 720×1280 depending on stage shape. It uploads from the hidden video directly into a GPU texture, without full-frame CPU readback. Rendering pauses in hidden tabs. Stop, camera failure, graphics-context loss, and page navigation release the stream and renderer resources; graphics-context loss displays a retry message.
 
 ## Built-in scenes
@@ -145,7 +147,7 @@ The custom domain is configured in GitHub Pages settings. A repository-root `CNA
 
 ## Manual camera check
 
-On desktop and Android, start the camera, grant permission, confirm that the live preview and diagnostics populate, then stop and start it again. Rotate and resize the viewport while the preview is active. Also verify that a denied permission can be recovered after allowing camera access in browser settings, and check the visible messages with no camera available and with another app holding the camera.
+On desktop and Android, start the camera, grant permission, confirm that the live preview and diagnostics populate, then stop and start it again. When multiple cameras are available, switch between front and rear cameras and try the device menu, including distinct rear lenses where exposed. Confirm the user-facing preview mirrors, while the scene, key settings, ball-play toggle, and diagnostics remain correct. If practical, deny a selected-device request or disconnect a camera; verify that the previous camera is restored or that a clear **Try again** path appears. Rotate and resize the viewport while the preview is active. Also verify that a denied permission can be recovered after allowing camera access in browser settings, and check the visible messages with no camera available and with another app holding the camera.
 
 For the compositor slice, also check:
 
