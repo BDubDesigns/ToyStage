@@ -36,6 +36,7 @@
           <div class="stage-frame" id="stage-frame">
             <video id="stage-video" autoplay muted playsinline hidden aria-hidden="true"></video>
             <canvas id="stage-canvas" class="stage-canvas" hidden role="img" aria-label="Live keyed camera over a chosen scene"></canvas>
+            <canvas id="sensing-overlay" class="sensing-overlay" hidden aria-hidden="true"></canvas>
             <div id="empty-state" class="empty-state">
               <div class="camera-glyph" aria-hidden="true">
                 <svg viewBox="0 0 48 40" fill="none">
@@ -138,6 +139,19 @@
           </dl>
 
           <p class="privacy-note"><span aria-hidden="true">◉</span> Live camera frames are shown in your browser. ToyStage does not upload or save them.</p>
+          <details class="sensing-panel">
+            <summary>Interaction check</summary>
+            <p class="key-help">See the solid areas that toys and hands will use for interaction.</p>
+            <label class="toggle"><input id="sensing-enabled" type="checkbox" checked /> Sense foreground</label>
+            <label class="toggle"><input id="sensing-debug" type="checkbox" /> Show interaction mask</label>
+            <p class="key-help">Cyan marks solid foreground. Tap the stage to check a spot. Color picking pauses sensing.</p>
+            <dl class="diagnostic-list">
+              <div class="diagnostic-row"><dt>Mask size / rate</dt><dd id="sensing-rate">—</dd></div>
+              <div class="diagnostic-row"><dt>Sensing / readback average</dt><dd id="sensing-time">—</dd></div>
+              <div class="diagnostic-row"><dt>Solid / changed coverage</dt><dd id="sensing-coverage">—</dd></div>
+            </dl>
+            <p id="sensing-probe" class="key-help" role="status">Show the mask, then tap a toy or empty blanket.</p>
+          </details>
         </aside>
       </main>
     </div>

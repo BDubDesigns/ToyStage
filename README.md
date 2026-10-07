@@ -51,9 +51,48 @@ The four stills in `public/scenes/` are optimized WebP conversions of Brandon's 
 4. Adjust **Soften edges** to smooth the outline and **Reduce green fringe** to reduce green reflections.
 5. **Check cutout** shows white foreground, black removed areas, and gray feathered edges. Uncheck **Remove screen** to compare with the original camera. **Reset settings** restores the key color, all sliders, and both checkboxes.
 
-Color comparison uses brightness-normalized RGB chromaticity in the GPU shader, rather than exact RGB matching. Calibration samples a temporary 5×5 patch from the source video only when you tap; it follows the same fit, orientation, and mirror mapping as the preview. There is no full-frame CPU keying or continuous pixel readback. Neither sampled pixels nor settings are persisted. Settings survive camera stop/start in the current page and reset on reload. The visual cutout check is not the future low-resolution interaction mask.
+Color comparison uses brightness-normalized RGB chromaticity in the GPU shader, rather than exact RGB matching. Calibration samples a temporary 5×5 patch from the source video only when you tap; it follows the same fit, orientation, and mirror mapping as the preview. There is no full-frame CPU keying or continuous pixel readback. Neither sampled pixels nor settings are persisted. Settings survive camera stop/start in the current page and reset on reload. The visual cutout check is independent of the low-resolution interaction mask below.
 
 Known limitations: green toys or green clothing close to the blanket hue will also disappear. Near-black shadows, mixed-color lighting, motion blur, and glossy or transparent objects can produce noise, holes, or halos. Despill only reduces excess green near the key hue and cannot recover hidden object detail. Higher tolerance/softness can erode foreground edges. Better lighting and distance from the blanket help; this slice does not attempt professional matting or object recognition.
+
+## Foreground interaction sensing
+
+In **Diagnostics → Interaction check**, **Sense foreground** runs by default. Enable **Show interaction mask** to overlay cyan cells on solid toys/hands; keyed blanket and the surrounding scene stay clear. Tap the stage to query a point and nearby region. **Check cutout** remains a separate visual keying aid. Turning off **Remove screen** intentionally makes the entire fitted camera region solid. Color picking temporarily suspends sensing; it resumes with the selected key settings.
+
+The separate sensing pass uses the existing GPU camera texture and shares the visible shader's key-alpha and camera mapping. It never sees background scenes. A binary cutoff at 0.5 alpha excludes faint feathered edges. An aspect-matched render target is bounded to 160×90 (90×160 in portrait, 120×90 for a 4:3 stage), at most 14,400 pixels / 57,600 RGBA readback bytes per sample. Only this small buffer is read back, at up to 15 Hz on fresh video frames. The visible compositor still targets 30 fps; there is no second animation loop. `getMaskSize` accepts a smaller long-edge budget for future measured tuning.
+
+This deliberately starts with synchronous limited readback. **Mask size / rate** and **Sensing / readback average** show measured sample frequency and time per sample, including CPU conversion. Readback time includes waiting for queued GPU work; CPU submission time now includes sensing on sampled frames. These are wall-clock timings, not a GPU timer query. Disable sensing to compare with the visual-only baseline. No PBO/fence pipeline or optical-flow dependency is warranted before measurements on actual devices.
+
+### Game API
+
+`WebGLCompositor.foregroundMask` exposes a `ForegroundMask`. Coordinates use the **whole stage**, including the empty border: x increases right, y increases down, `(0, 0)` is top-left and `(1, 1)` bottom-right. GPU row order is converted inside the tiny mask. Mirroring, camera orientation, letterboxing, inset and stage aspect match the visible camera. Region queries clip to the stage and return the fraction of intersecting mask cells that are occupied. `occupied` with a radius tests a square neighborhood in stage units.
+
+```ts
+const mask = compositor.foregroundMask;
+// Avoid acting on uninitialized, paused or stale camera input.
+if (mask.timestamp !== null && performance.now() - mask.timestamp < 250) {
+  const hit = mask.occupied(0.5, 0.5, 0.02);
+  const coverage = mask.coverage({ x: 0.4, y: 0.4, width: 0.2, height: 0.2 });
+  const motion = mask.motion({ x: 0.4, y: 0.4, width: 0.2, height: 0.2 });
+  // motion.changed: fraction of cells whose occupancy changed.
+  // motion.velocity: approximate occupied-centroid displacement per second,
+  //                 in stage units; null when either frame has <2 solid cells.
+  // motion.intervalMs: 0 when no comparable recent frame exists.
+}
+```
+
+`timestamp` is null until data arrives. Stop, hidden tabs, sensing off, calibration, key changes, stage resize and decoded video dimension changes clear occupancy/history. Motion comparison also drops gaps above 250 ms; restarting never creates a phantom hit. `pixels()` provides a caller-owned top-to-bottom binary copy only for debugging. Gameplay should use queries. The overlay copies cells only when shown; no frames or masks are stored, recorded, uploaded, or persisted.
+
+Motion is intentionally approximate: centroid displacement can be biased by entry/exit, shape changes or multiple toys in a region. It is not optical flow or recognition. Static foreground has zero change; a wholly entering/exiting region has change but no usable velocity. Later ball collision can use occupancy/change as its reliable first signal. Small/fast objects, thin edges, shadows and keying noise may be missed or fluctuate at this resolution/rate. Physical-device checks remain necessary.
+
+### Sensing device check
+
+On the Pixel 10 Pro XL and laptop:
+
+- Show the mask and move a toy/hand through the center and camera corners. Cyan should follow solid foreground; the empty blanket and scene border should stay clear. Tap both occupied and empty spots to check the query result.
+- Try phone portrait/landscape, camera rotation and a mirrored front camera. Check that the overlay follows the visible foreground and that switching scenes does not change occupancy.
+- Move a toy, then hold it still; changed coverage should rise during motion and settle near zero. Recalibrate, adjust tolerance/softness, toggle the cutout check, stop/start, hide/return, and simulate context loss. Expect no lingering overlay or false motion on resume.
+- Compare **Sense foreground** off/on for 30 seconds each, with the overlay off, in both a still scene and Cosmic Cruise. Record rendered FPS, submission time, mask Hz and sensing/readback times. Repeat with the overlay on. The target is still about 30 rendered fps with no material drop when sensing runs. Software-browser measurements establish behavior and bound the readback, but do not establish actual phone/laptop performance.
 
 ## Deployment
 

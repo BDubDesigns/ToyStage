@@ -11,6 +11,7 @@ import {
 } from "./camera";
 import { WebGLCompositor } from "./compositor";
 import type { RenderDiagnostics } from "./compositor";
+import type { ForegroundMask } from "./foreground-mask";
 import { colorFromHex, colorToHex, defaultChromaKeySettings } from "./chroma-key";
 
 const cameraButton = getElement<HTMLButtonElement>("camera-button");
@@ -35,6 +36,55 @@ let activeStream: MediaStream | null = null;
 let renderer: WebGLCompositor | null = null;
 let session: AbortController | null = null;
 let removeTrackListener: (() => void) | null = null;
+
+const sensingEnabled = getElement<HTMLInputElement>("sensing-enabled");
+const sensingDebug = getElement<HTMLInputElement>("sensing-debug");
+const sensingOverlay = getElement<HTMLCanvasElement>("sensing-overlay");
+const sensingContext = sensingOverlay.getContext("2d");
+const sensingRate = getElement<HTMLElement>("sensing-rate");
+const sensingTime = getElement<HTMLElement>("sensing-time");
+const sensingCoverage = getElement<HTMLElement>("sensing-coverage");
+const sensingProbe = getElement<HTMLElement>("sensing-probe");
+let maskImage: ImageData | null = null;
+
+function updateMask(mask: ForegroundMask): void {
+  sensingOverlay.hidden = !sensingDebug.checked || mask.timestamp === null;
+  if (mask.timestamp === null) {
+    sensingContext?.clearRect(0, 0, sensingOverlay.width, sensingOverlay.height);
+    maskImage = null;
+    sensingCoverage.textContent = "—";
+    sensingProbe.textContent = "Show the mask, then tap a toy or empty blanket.";
+    return;
+  }
+  // Hidden debug UI does no pixel copying or coverage scans.
+  if (!sensingDebug.checked) return;
+  sensingCoverage.textContent = `${(mask.coverage({ x: 0, y: 0, width: 1, height: 1 }) * 100).toFixed(1)}% solid / ${(mask.motion().changed * 100).toFixed(1)}% changed`;
+  if (!sensingContext) return;
+  if (!maskImage || maskImage.width !== mask.width || maskImage.height !== mask.height) {
+    sensingOverlay.width = mask.width;
+    sensingOverlay.height = mask.height;
+    maskImage = sensingContext.createImageData(mask.width, mask.height);
+  }
+  const pixels = mask.pixels();
+  for (let i = 0; i < pixels.length; i++) {
+    maskImage.data[i * 4] = 40;
+    maskImage.data[i * 4 + 1] = 230;
+    maskImage.data[i * 4 + 2] = 255;
+    maskImage.data[i * 4 + 3] = pixels[i] ? 155 : 0;
+  }
+  sensingContext.putImageData(maskImage, 0, 0);
+}
+
+sensingEnabled.addEventListener("change", () => {
+  renderer?.setSensingEnabled(sensingEnabled.checked && !sampling);
+  sensingRate.textContent = sensingEnabled.checked ? "Waiting for mask" : "Off";
+  sensingTime.textContent = "—";
+});
+sensingDebug.addEventListener("change", () => {
+  sensingOverlay.hidden = true;
+  if (!sensingDebug.checked) sensingCoverage.textContent = "—";
+  if (renderer) updateMask(renderer.foregroundMask);
+});
 
 const scenePicker = getElement<HTMLElement>("scene-picker");
 const sceneStatus = getElement<HTMLElement>("scene-status");
@@ -117,6 +167,7 @@ function applyKeySettings(): void {
 
 function setSampling(value: boolean): void {
   sampling = value;
+  renderer?.setSensingEnabled(sensingEnabled.checked && !sampling);
   sampleButton.textContent = value ? "Cancel color pick" : "Pick blanket color";
   sampleButton.setAttribute("aria-pressed", String(value));
   canvas.classList.toggle("sampling", value);
@@ -141,6 +192,14 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && sampling) setSampling(false);
 });
 canvas.addEventListener("click", (event) => {
+  if (!sampling && sensingDebug.checked && renderer && renderer.foregroundMask.timestamp !== null) {
+    const bounds = canvas.getBoundingClientRect();
+    const x = (event.clientX - bounds.left) / bounds.width;
+    const y = (event.clientY - bounds.top) / bounds.height;
+    const mask = renderer.foregroundMask;
+    const coverage = mask.coverage({ x: x - 0.03, y: y - 0.03, width: 0.06, height: 0.06 });
+    sensingProbe.textContent = `${mask.occupied(x, y) ? "Solid" : "Empty"} at (${x.toFixed(2)}, ${y.toFixed(2)}) · ${(coverage * 100).toFixed(0)}% nearby coverage.`;
+  }
   if (!sampling || !renderer) return;
   const bounds = canvas.getBoundingClientRect();
   try {
@@ -225,6 +284,7 @@ async function startCamera(): Promise<void> {
     renderer = new WebGLCompositor(canvas, video, {
       mirrored: shouldMirrorPreview(track.getSettings().facingMode),
       onDiagnostics: updateRenderDiagnostics,
+      onMask: updateMask,
       onError: (error) => {
         releaseStream();
         showFailure(error, false, true);
@@ -232,6 +292,7 @@ async function startCamera(): Promise<void> {
     });
     if (selectedScene.kind === "animated" || selectedImage) renderer.setScene(selectedScene, selectedImage);
     renderer.setSceneMotion(sceneMotion.checked);
+    renderer.setSensingEnabled(sensingEnabled.checked);
     renderer.start();
     applyKeySettings();
     sampleButton.disabled = false;
@@ -329,6 +390,8 @@ function updateRenderDiagnostics(stats: RenderDiagnostics | null): void {
   if (!stats) {
     renderRate.textContent = "Paused while hidden";
     frameTime.textContent = submissionTime.textContent = "—";
+    sensingRate.textContent = "Paused while hidden";
+    sensingTime.textContent = "—";
     return;
   }
   renderRate.textContent = `${stats.fps.toFixed(1)} fps / 30 target`;
@@ -337,10 +400,14 @@ function updateRenderDiagnostics(stats: RenderDiagnostics | null): void {
   renderSize.textContent = `${stats.width} × ${stats.height}`;
   videoSize.textContent = `${stats.videoWidth} × ${stats.videoHeight}`;
   cameraView.textContent = stats.mirrored ? "Mirrored · fit whole frame" : "Unmirrored · fit whole frame";
+  sensingRate.textContent = sampling ? "Paused for color pick" : !sensingEnabled.checked ? "Off" : `${stats.maskWidth} × ${stats.maskHeight} / ${stats.sensingHz.toFixed(1)} Hz`;
+  sensingTime.textContent = sensingEnabled.checked && !sampling ? `${stats.sensingMs.toFixed(2)} ms / ${stats.readbackMs.toFixed(2)} ms` : "—";
 }
 
 function resetRenderDiagnostics(): void {
   renderRate.textContent = frameTime.textContent = submissionTime.textContent = renderSize.textContent = cameraView.textContent = "—";
+  sensingRate.textContent = sensingTime.textContent = sensingCoverage.textContent = "—";
+  sensingOverlay.hidden = true;
 }
 
 function setState(state: "off" | "requesting" | "live" | "error", label: string): void {

@@ -1,6 +1,9 @@
 import { getCameraRect, getRenderSize } from "./compositor-layout";
 import { defaultChromaKeySettings, getSamplePoint, sampleVideoColor } from "./chroma-key";
 import type { ChromaKeySettings, RGB } from "./chroma-key";
+import { createProgram } from "./gl-program";
+import { ForegroundSensor } from "./foreground-sensor";
+import type { ForegroundMask } from "./foreground-mask";
 import { CAMERA_FRAGMENT } from "./chroma-key-shader";
 import { SCENE_FRAGMENT } from "./scene-shader";
 import { getSceneUvScale } from "./scenes";
@@ -15,27 +18,30 @@ export interface RenderDiagnostics {
   videoWidth: number;
   videoHeight: number;
   mirrored: boolean;
+  maskWidth: number;
+  maskHeight: number;
+  sensingHz: number;
+  sensingMs: number;
+  readbackMs: number;
 }
 
 interface CompositorOptions {
   mirrored: boolean;
   onDiagnostics: (diagnostics: RenderDiagnostics | null) => void;
   onError: (error: Error) => void;
+  onMask?: (mask: ForegroundMask) => void;
 }
-
-const VERTEX = `#version 300 es
-out vec2 v_uv;
-void main() {
-  // A fullscreen triangle, with no vertex buffer or per-frame geometry upload.
-  vec2 uv = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2));
-  v_uv = uv;
-  gl_Position = vec4(uv * 2.0 - 1.0, 0.0, 1.0);
-}`;
 
 const FRAME_INTERVAL = 1000 / 30;
 
 export class WebGLCompositor {
   private readonly gl: WebGL2RenderingContext;
+  private readonly sensor: ForegroundSensor;
+  private sensingEnabled = true;
+  private samples = 0;
+  private sensingTotal = 0;
+  private readbackTotal = 0;
+  private sensingFrameTime = -1;
   private background: WebGLProgram | null = null;
   private camera: WebGLProgram | null = null;
   private texture: WebGLTexture | null = null;
@@ -70,9 +76,27 @@ export class WebGLCompositor {
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false });
     if (!gl) throw new Error("WebGL 2 is unavailable. Try a recent browser with hardware acceleration enabled.");
     this.gl = gl;
+    this.sensor = new ForegroundSensor(gl);
+  }
+
+  get foregroundMask(): ForegroundMask { return this.sensor.mask; }
+
+  setSensingEnabled(enabled: boolean): void {
+    if (enabled === this.sensingEnabled) return;
+    this.sensingEnabled = enabled;
+    this.resetSensing();
+  }
+
+  private resetSensing(): void {
+    this.sensor.reset();
+    this.sensingFrameTime = -1;
+    this.samples = this.sensingTotal = this.readbackTotal = 0;
+    this.options.onMask?.(this.sensor.mask);
   }
 
   setChromaKey(settings: ChromaKeySettings): void {
+    const old = this.keySettings;
+    if (old.enabled !== settings.enabled || old.tolerance !== settings.tolerance || old.softness !== settings.softness || old.color.some((value, i) => value !== settings.color[i])) this.resetSensing();
     this.keySettings = { ...settings, color: [...settings.color] };
   }
 
@@ -124,6 +148,8 @@ export class WebGLCompositor {
     gl.bindVertexArray(null);
     gl.bindTexture(gl.TEXTURE_2D, null);
     gl.useProgram(null);
+    this.sensor.stop();
+    this.resetSensing();
     gl.deleteTexture(this.texture);
     gl.deleteTexture(this.sceneTexture);
     this.sceneTexture = null;
@@ -186,6 +212,7 @@ export class WebGLCompositor {
     gl.useProgram(this.camera);
     gl.uniform1i(gl.getUniformLocation(this.camera, "u_camera"), 0);
     gl.uniform1i(gl.getUniformLocation(this.camera, "u_mirrored"), this.options.mirrored ? 1 : 0);
+    this.sensor.start();
   }
 
   private readonly resize = (): void => {
@@ -194,6 +221,7 @@ export class WebGLCompositor {
     if (this.canvas.width !== size.width || this.canvas.height !== size.height) {
       this.canvas.width = size.width;
       this.canvas.height = size.height;
+      this.resetSensing();
     }
     this.gl.viewport(0, 0, size.width, size.height);
   };
@@ -205,6 +233,7 @@ export class WebGLCompositor {
     this.statsStart = performance.now();
     this.previousFrame = 0;
     this.frames = this.frameTotal = this.submissionTotal = 0;
+    this.resetSensing();
     if (this.running && !document.hidden && this.animationId === null) {
       this.animationId = requestAnimationFrame(this.tick);
     }
@@ -217,7 +246,10 @@ export class WebGLCompositor {
 
   private readonly onVisibilityChange = (): void => {
     this.cancelFrame();
-    if (document.hidden) this.options.onDiagnostics(null);
+    if (document.hidden) {
+      this.resetSensing();
+      this.options.onDiagnostics(null);
+    }
     else this.resume();
   };
 
@@ -240,7 +272,7 @@ export class WebGLCompositor {
       try {
         if (this.video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && this.video.videoWidth > 0 && this.video.videoHeight > 0) {
           const start = performance.now();
-          this.draw();
+          this.draw(now);
           this.submissionTotal += performance.now() - start;
           if (this.previousFrame) this.frameTotal += now - this.previousFrame;
           this.previousFrame = now;
@@ -252,10 +284,15 @@ export class WebGLCompositor {
               width: this.canvas.width, height: this.canvas.height,
               videoWidth: this.video.videoWidth, videoHeight: this.video.videoHeight,
               mirrored: this.options.mirrored,
+              maskWidth: this.foregroundMask.width, maskHeight: this.foregroundMask.height,
+              sensingHz: this.samples * 1000 / (now - this.statsStart),
+              sensingMs: this.samples ? this.sensingTotal / this.samples : 0,
+              readbackMs: this.samples ? this.readbackTotal / this.samples : 0,
             });
             this.statsStart = now;
             this.previousFrame = 0;
             this.frames = this.frameTotal = this.submissionTotal = 0;
+            this.samples = this.sensingTotal = this.readbackTotal = 0;
           }
         }
       } catch (error) {
@@ -267,7 +304,7 @@ export class WebGLCompositor {
     this.animationId = requestAnimationFrame(this.tick);
   };
 
-  private draw(): void {
+  private draw(now: number): void {
     const gl = this.gl;
     const width = this.video.videoWidth;
     const height = this.video.videoHeight;
@@ -275,6 +312,7 @@ export class WebGLCompositor {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.texture);
     if (width !== this.textureWidth || height !== this.textureHeight) {
+      this.resetSensing();
       // Upload directly from the DOM video source, with no CPU pixel readback.
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
       this.textureWidth = width;
@@ -312,40 +350,12 @@ export class WebGLCompositor {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
-  }
-}
-
-function createProgram(gl: WebGL2RenderingContext, fragmentSource: string): WebGLProgram {
-  const shaders: WebGLShader[] = [];
-  const attached: WebGLShader[] = [];
-  const program = gl.createProgram();
-  if (!program) throw new Error("The graphics renderer could not create a shader program.");
-  try {
-    for (const [type, source] of [[gl.VERTEX_SHADER, VERTEX], [gl.FRAGMENT_SHADER, fragmentSource]] as const) {
-      const shader = gl.createShader(type);
-      if (!shader) throw new Error("The graphics renderer could not create a shader.");
-      shaders.push(shader);
-      gl.shaderSource(shader, source);
-      gl.compileShader(shader);
-      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-        throw new Error(`Stage shader failed: ${gl.getShaderInfoLog(shader) ?? "unknown error"}`);
-      }
-      gl.attachShader(program, shader);
-      attached.push(shader);
-    }
-    gl.linkProgram(program);
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
-      throw new Error(`Stage program failed: ${gl.getProgramInfoLog(program) ?? "unknown error"}`);
-    }
-    return program;
-  } catch (error) {
-    gl.deleteProgram(program);
-    throw error;
-  } finally {
-    for (const shader of shaders) {
-      // Detach before deleting so linked programs don't retain shader objects.
-      if (gl.isProgram(program) && attached.includes(shader)) gl.detachShader(program, shader);
-      gl.deleteShader(shader);
+    if (this.sensingEnabled && this.sensingFrameTime !== this.lastVideoTime && this.sensor.sample(now, this.canvas.width, this.canvas.height, rect, key, this.options.mirrored)) {
+      this.sensingFrameTime = this.lastVideoTime;
+      this.samples++;
+      this.sensingTotal += this.sensor.sampleMs;
+      this.readbackTotal += this.sensor.readbackMs;
+      this.options.onMask?.(this.foregroundMask);
     }
   }
 }
