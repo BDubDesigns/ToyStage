@@ -1,4 +1,79 @@
 import type { Ball } from "./ball";
+import type { BallProfile } from "./ball-profiles";
+
+// Shared by the overlay and small picker icons; no images or extra render loop.
+export function drawBallAppearance(ctx: CanvasRenderingContext2D, profile: BallProfile, x: number, y: number, r: number): void {
+  ctx.save();
+  ctx.shadowColor = "#00000080";
+  ctx.shadowBlur = r * 0.4;
+  ctx.shadowOffsetY = r * 0.15;
+  ctx.beginPath();
+  ctx.ellipse(x, y, r * (profile.id === "balloon" ? 0.88 : 1), r, 0, 0, Math.PI * 2);
+  const shade = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.05, x, y, r);
+  profile.colors.forEach((color, i) => shade.addColorStop([0, 0.45, 1][i], color));
+  ctx.fillStyle = shade;
+  ctx.fill();
+  ctx.shadowBlur = ctx.shadowOffsetY = 0;
+  ctx.clip();
+  ctx.lineWidth = r * 0.08;
+  if (profile.id === "eight-ball") {
+    ctx.fillStyle = "#fff8e9";
+    ctx.beginPath(); ctx.arc(x, y, r * 0.47, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#111820";
+    ctx.font = `bold ${r * 0.76}px sans-serif`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("8", x, y + r * 0.035);
+  } else if (profile.id === "basketball" || profile.id === "dodgeball") {
+    ctx.strokeStyle = profile.id === "basketball" ? "#552919" : "#ffbfb780";
+    ctx.beginPath(); ctx.moveTo(x - r, y); ctx.lineTo(x + r, y); ctx.moveTo(x, y - r); ctx.lineTo(x, y + r); ctx.stroke();
+    ctx.beginPath(); ctx.ellipse(x, y, r * 0.48, r, 0, 0, Math.PI * 2); ctx.stroke();
+    if (profile.id === "dodgeball") {
+      ctx.lineWidth = r * 0.025;
+      ctx.beginPath(); ctx.ellipse(x, y, r, r * 0.44, 0, 0, Math.PI * 2); ctx.stroke();
+    }
+  } else if (profile.id === "bowling-ball") {
+    ctx.fillStyle = "#120e29";
+    for (const [dx, dy] of [[-0.2, -0.28], [0.18, -0.22], [0.05, 0.13]]) {
+      ctx.beginPath(); ctx.arc(x + r * dx, y + r * dy, r * 0.13, 0, Math.PI * 2); ctx.fill();
+    }
+  } else if (profile.id === "super-ball") {
+    ctx.strokeStyle = "#f4ffcee0";
+    ctx.lineWidth = r * 0.25;
+    ctx.beginPath(); ctx.ellipse(x, y, r * 1.2, r * 0.25, -0.6, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.fillStyle = "#ffffff80";
+  ctx.beginPath(); ctx.ellipse(x - r * 0.33, y - r * 0.4, r * 0.19, r * 0.11, -0.7, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+  if (profile.id === "balloon") {
+    ctx.fillStyle = profile.colors[1];
+    ctx.beginPath(); ctx.moveTo(x, y + r * 0.9); ctx.lineTo(x - r * 0.13, y + r * 1.12); ctx.lineTo(x + r * 0.13, y + r * 1.12); ctx.closePath(); ctx.fill();
+  }
+}
+
+export function getOffscreenIndicator(ball: Ball, width: number, height: number): { x: number; y: number; size: number } | null {
+  if (!ball.aboveStage) return null;
+  const size = Math.max(12, Math.min(width, height) * 0.065);
+  const margin = size + 4;
+  return { x: Math.max(margin, Math.min(width - margin, ball.x * width)), y: size + 4, size };
+}
+
+function drawOffscreenIndicator(ctx: CanvasRenderingContext2D, ball: Ball, marker: { x: number; y: number; size: number }): void {
+  const { x, y, size } = marker;
+  ctx.save();
+  ctx.fillStyle = "#101619e8";
+  ctx.strokeStyle = "#fff8e9";
+  ctx.lineWidth = Math.max(1.5, size * 0.06);
+  ctx.lineJoin = "round";
+  // A high-contrast upward pointer containing the active ball's miniature.
+  ctx.beginPath();
+  ctx.moveTo(x, y - size); ctx.lineTo(x + size * 0.9, y - size * 0.1);
+  ctx.lineTo(x + size * 0.65, y - size * 0.1); ctx.lineTo(x + size * 0.65, y + size);
+  ctx.lineTo(x - size * 0.65, y + size); ctx.lineTo(x - size * 0.65, y - size * 0.1);
+  ctx.lineTo(x - size * 0.9, y - size * 0.1); ctx.closePath(); ctx.fill(); ctx.stroke();
+  drawBallAppearance(ctx, ball.profile, x, y + size * 0.28, size * 0.48);
+  ctx.restore();
+}
 
 // A small Canvas overlay above the keyed toy makes the ball always visible.
 // Driven by the compositor's frame callback, never its own animation loop.
@@ -18,33 +93,9 @@ export function drawBall(canvas: HTMLCanvasElement, ball: Ball, width: number, h
     ctx.strokeRect(x - 3 * r, y - 3 * r, 6 * r, 6 * r);
     ctx.setLineDash([]);
   }
-  ctx.save();
-  ctx.shadowColor = "#00000080";
-  ctx.shadowBlur = r * 0.4;
-  ctx.shadowOffsetY = r * 0.15;
-  ctx.beginPath();
-  ctx.arc(x, y, r, 0, Math.PI * 2);
-  const shade = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.05, x, y, r);
-  shade.addColorStop(0, "#fff4b3");
-  shade.addColorStop(0.45, "#ffc354");
-  shade.addColorStop(1, "#ed6b37");
-  ctx.fillStyle = shade;
-  ctx.fill();
-  ctx.shadowBlur = ctx.shadowOffsetY = 0;
-  ctx.clip();
-  ctx.strokeStyle = "#fff7d5c0";
-  ctx.lineWidth = r * 0.13;
-  ctx.beginPath();
-  ctx.ellipse(x, y, r * 0.38, r, -0.5, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.ellipse(x, y, r, r * 0.27, -0.5, 0, Math.PI * 2);
-  ctx.stroke();
-  ctx.fillStyle = "#ffffffb0";
-  ctx.beginPath();
-  ctx.ellipse(x - r * 0.33, y - r * 0.4, r * 0.19, r * 0.11, -0.7, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.restore();
+  const marker = getOffscreenIndicator(ball, width, height);
+  if (marker) { drawOffscreenIndicator(ctx, ball, marker); return; }
+  drawBallAppearance(ctx, ball.profile, x, y, r);
   const sinceHit = now - ball.debug.hitTime;
   if (sinceHit < 300) {
     ctx.strokeStyle = `rgba(255,245,184,${1 - sinceHit / 300})`;

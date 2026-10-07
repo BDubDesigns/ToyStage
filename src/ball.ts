@@ -1,5 +1,7 @@
 import type { CameraRect } from "./compositor-layout";
 import type { ForegroundMask } from "./foreground-mask";
+import { getBallProfile } from "./ball-profiles";
+import type { BallProfile, BallType } from "./ball-profiles";
 
 interface Vector { x: number; y: number }
 export interface BallDebug {
@@ -30,9 +32,35 @@ export class Ball {
   private sampleTime: number | null = null;
   private touching = false;
   private clearSamples = 0;
+  private activeProfile: BallProfile;
 
+  constructor(type: BallType = "eight-ball") {
+    this.activeProfile = getBallProfile(type);
+    this.updateRadius();
+  }
+
+  get profile(): BallProfile { return this.activeProfile; }
   get radiusX(): number { return this.radius * this.scaleX; }
   get radiusY(): number { return this.radius * this.scaleY; }
+  get grounded(): boolean {
+    return this.profile.bounds === "gravity" && this.y >= this.bounds.y + this.bounds.height - this.radiusY - 1e-9 && this.vy === 0;
+  }
+  // The marker disappears as soon as any of the object re-enters the stage.
+  // Camera inset/letterboxing is not a ceiling or the indicator's top edge.
+  get aboveStage(): boolean { return this.profile.bounds === "gravity" && this.y + this.radiusY < 0; }
+
+  setType(type: BallType): void {
+    this.activeProfile = getBallProfile(type);
+    this.updateRadius();
+    this.reset();
+  }
+
+  private updateRadius(): void {
+    // Scale the entire preset range in a narrow fitted camera: preserve #7's
+    // 8 Ball size without making Super Ball and Dodgeball equally large.
+    const fit = Math.min(1, this.bounds.width / this.scaleX * 0.1 / 0.055, this.bounds.height / this.scaleY * 0.1 / 0.055);
+    this.radius = this.profile.radius * fit;
+  }
 
   layout(width: number, height: number, bounds: CameraRect): void {
     const scaleX = Math.min(width, height) / width, scaleY = Math.min(width, height) / height;
@@ -41,7 +69,7 @@ export class Ball {
     this.scaleX = scaleX;
     this.scaleY = scaleY;
     this.bounds = { ...bounds };
-    this.radius = Math.min(0.055, bounds.width / scaleX * 0.1, bounds.height / scaleY * 0.1);
+    this.updateRadius();
     // Rotation changes reachable play space. Start in its center instead of
     // leaving the ball trapped outside the fitted camera.
     this.reset();
@@ -72,7 +100,7 @@ export class Ball {
     const dt = this.frameTime === null ? 0 : clamp((now - this.frameTime) / 1000, 0, 0.05);
     this.frameTime = now;
     // Small bounded substeps avoid tunnelling through stage boundaries after
-    // a dropped render frame. There is no gravity: an idle ball waits for play.
+    // a dropped render frame, including while above the visible stage.
     const steps = Math.max(1, Math.ceil(dt * 120));
     for (let i = 0; i < steps; i++) this.integrate(dt / steps);
     if (mask.timestamp === this.sampleTime) return;
@@ -119,27 +147,48 @@ export class Ball {
     }
     direction.x /= length;
     direction.y /= length;
-    const strength = clamp(0.22 + toySpeed * 1.15 + ballSpeed * 0.55, 0.22, 1.8);
+    const strength = clamp(0.22 + toySpeed * 1.15 + ballSpeed * 0.55, 0.22, 1.8) * this.profile.hitScale;
     this.debug.impulse = { x: direction.x * strength, y: direction.y * strength };
     this.vx = this.vx * 0.25 + this.debug.impulse.x;
     this.vy = this.vy * 0.25 + this.debug.impulse.y;
-    const speed = Math.hypot(this.vx, this.vy);
-    if (speed > 2) { this.vx *= 2 / speed; this.vy *= 2 / speed; }
+    this.limitSpeed();
     this.debug.hitTime = now;
     this.debug.hits++;
   }
 
   private integrate(dt: number): void {
-    this.vx *= Math.exp(-1.05 * dt);
-    this.vy *= Math.exp(-1.05 * dt);
-    if (Math.hypot(this.vx, this.vy) < 0.015) this.vx = this.vy = 0;
+    const p = this.profile, grounded = this.grounded;
+    this.vx *= Math.exp(-(grounded ? p.rollingDrag : p.airDrag) * dt);
+    if (p.bounds === "contained") {
+      // Keep #7's damping, settling, and all-sides boundary behavior exactly.
+      this.vy *= Math.exp(-p.airDrag * dt);
+      if (Math.hypot(this.vx, this.vy) < p.settleSpeed) this.vx = this.vy = 0;
+    } else if (grounded) {
+      // Support cancels gravity at rest, rather than generating tiny bounces.
+      if (Math.abs(this.vx) < p.settleSpeed) this.vx = 0;
+    } else {
+      // Linear air drag gives the balloon a gentle terminal fall speed while
+      // allowing a strong upward impulse. Never snap an airborne apex to rest.
+      const drag = Math.exp(-p.airDrag * dt);
+      this.vy = p.airDrag > 0 ? this.vy * drag + p.gravity / p.airDrag * (1 - drag) : this.vy + p.gravity * dt;
+      this.limitSpeed();
+    }
     this.x += this.vx * this.scaleX * dt;
     this.y += this.vy * this.scaleY * dt;
     const left = this.bounds.x + this.radiusX, right = this.bounds.x + this.bounds.width - this.radiusX;
     const top = this.bounds.y + this.radiusY, bottom = this.bounds.y + this.bounds.height - this.radiusY;
-    if (this.x < left) { this.x = left; this.vx = Math.abs(this.vx) * 0.78; }
-    if (this.x > right) { this.x = right; this.vx = -Math.abs(this.vx) * 0.78; }
-    if (this.y < top) { this.y = top; this.vy = Math.abs(this.vy) * 0.78; }
-    if (this.y > bottom) { this.y = bottom; this.vy = -Math.abs(this.vy) * 0.78; }
+    if (this.x < left) { this.x = left; this.vx = Math.abs(this.vx) * p.wallRestitution; }
+    if (this.x > right) { this.x = right; this.vx = -Math.abs(this.vx) * p.wallRestitution; }
+    if (p.bounds === "contained" && this.y < top) { this.y = top; this.vy = Math.abs(this.vy) * p.wallRestitution; }
+    if (this.y > bottom) {
+      this.y = bottom;
+      const rebound = Math.abs(this.vy) * p.floorRestitution;
+      this.vy = p.bounds === "gravity" && rebound < p.settleSpeed ? 0 : -rebound;
+    }
+  }
+
+  private limitSpeed(): void {
+    const speed = Math.hypot(this.vx, this.vy), max = this.profile.maxSpeed;
+    if (speed > max) { this.vx *= max / speed; this.vy *= max / speed; }
   }
 }
