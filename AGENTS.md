@@ -76,6 +76,8 @@ The app uses npm, Vite, and TypeScript.
 
 Application code lives in `src/`; `index.html` is the Vite entry point. Camera acquisition and capability checks live in `src/camera.ts`. Use a secure context (HTTPS, or localhost) for camera testing. The Pixel's manual camera check needs an HTTPS URL reachable from the phone.
 
+Production is served at `https://toystage.qcfailed.com` through GitHub Pages. `.github/workflows/pages.yml` deploys successful builds from `main`; see the README for the one-time Pages and DNS setup.
+
 ## Testing expectations
 
 Testing strategy will evolve with the implementation, but every issue should verify the behavior it introduces.

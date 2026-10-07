@@ -27,6 +27,30 @@ npm run preview
 
 The diagnostics panel reports the active camera's video size, reported frame rate and device label, browser version, and WebGL 2 availability. The rear camera is preferred where the browser supports facing-mode selection. User-facing previews are mirrored; environment-facing previews are not.
 
+## Deployment
+
+Production site: [https://toystage.qcfailed.com](https://toystage.qcfailed.com)
+
+The `.github/workflows/pages.yml` workflow runs tests and builds the app on every push to `main`, then deploys the `dist/` artifact to GitHub Pages. A failed test or build stops the workflow before deployment.
+
+### One-time GitHub Pages setup
+
+Before merging the deployment workflow, open **Settings → Pages** in `BDubDesigns/ToyStage` and:
+
+1. Set **Build and deployment → Source** to **GitHub Actions**.
+2. Enter `toystage.qcfailed.com` under **Custom domain** and save.
+3. After GitHub verifies DNS and provisions the certificate, enable **Enforce HTTPS**.
+
+### DNS record
+
+At the DNS provider for `qcfailed.com`, create this record:
+
+| Type | Host/name | Target |
+| --- | --- | --- |
+| CNAME | `toystage` | `bdubdesigns.github.io` |
+
+The custom domain is configured in GitHub Pages settings. A repository-root `CNAME` file is not used for this Actions deployment.
+
 ## Manual camera check
 
 On desktop and Android, start the camera, grant permission, confirm that the live preview and diagnostics populate, then stop and start it again. Rotate and resize the viewport while the preview is active. Also verify that a denied permission can be recovered after allowing camera access in browser settings, and check the visible messages with no camera available and with another app holding the camera.
