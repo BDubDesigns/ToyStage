@@ -76,6 +76,8 @@ The app uses npm, Vite, and TypeScript.
 
 Application code lives in `src/`; `index.html` is the Vite entry point. Camera acquisition and capability checks live in `src/camera.ts`. Use a secure context (HTTPS, or localhost) for camera testing. The Pixel's manual camera check needs an HTTPS URL reachable from the phone.
 
+The stage's visible output is `#stage-canvas`, owned by `src/compositor.ts`. The hidden video is only a local texture source. The compositor draws a procedural test background followed by an opaque, aspect-contained camera layer with a small inset; chroma keying is the next slice. `src/compositor-layout.ts` owns stage-normalized fitting and the portrait/landscape 720p drawing-buffer budget. Browser-decoded video dimensions determine orientation; user-facing mirroring happens in the camera shader. Rendering is capped at 30 fps and pauses when the document is hidden. `start()` allocates GPU resources/listeners, `stop()` releases them, and `dispose()` permanently ends that renderer instance. The sensing mask remains a separate future pipeline.
+
 Production is served at `https://toystage.qcfailed.com` through GitHub Pages. `.github/workflows/pages.yml` deploys successful builds from `main`; see the README for the one-time Pages and DNS setup.
 
 ## Testing expectations
