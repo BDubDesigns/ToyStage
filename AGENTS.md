@@ -66,20 +66,15 @@ The initial repository bootstrap commit may land directly on `main`. After that:
 
 ## Repository commands and structure
 
-This repository is new. Do not invent commands, package-manager choices, directory conventions, or test tooling before they exist.
+The app uses npm, Vite, and TypeScript.
 
-When issue #2 establishes the application stack, update this section with:
+- Install dependencies: `npm install`
+- Start the development server: `npm run dev`
+- Run unit tests: `npm test`
+- Type-check and build: `npm run build`
+- Preview a production build: `npm run preview`
 
-- package manager
-- install command
-- development command
-- test command
-- build command
-- lint/type-check commands
-- important top-level directories
-- any browser/device test workflow that future agents need
-
-Future agents should prefer the documented commands here instead of guessing.
+Application code lives in `src/`; `index.html` is the Vite entry point. Camera acquisition and capability checks live in `src/camera.ts`. Use a secure context (HTTPS, or localhost) for camera testing. The Pixel's manual camera check needs an HTTPS URL reachable from the phone.
 
 ## Testing expectations
 

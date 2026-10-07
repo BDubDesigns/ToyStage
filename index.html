@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#10161a" />
+    <meta name="description" content="ToyStage brings real toys into digital play scenes." />
+    <title>ToyStage — Live Stage</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="ToyStage home">
+          <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+          <span class="brand-name">TOYSTAGE</span>
+        </a>
+        <div class="topbar-right">
+          <span id="camera-state" class="state-pill" data-state="off">
+            <span class="state-dot" aria-hidden="true"></span>
+            <span id="camera-state-label">Camera off</span>
+          </span>
+          <button id="camera-button" class="button button-primary" type="button">Start camera</button>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="stage-column" aria-labelledby="stage-heading">
+          <div class="stage-heading-row">
+            <div>
+              <p class="eyebrow">PLAY SPACE / 01</p>
+              <h1 id="stage-heading">Live stage</h1>
+            </div>
+            <p class="local-note"><span aria-hidden="true">●</span> Camera stays on this device</p>
+          </div>
+
+          <div class="stage-frame" id="stage-frame">
+            <video id="stage-video" class="stage-video" autoplay muted playsinline hidden aria-label="Live camera preview"></video>
+            <div id="empty-state" class="empty-state">
+              <div class="camera-glyph" aria-hidden="true">
+                <svg viewBox="0 0 48 40" fill="none">
+                  <path d="M4 11.5A4.5 4.5 0 0 1 8.5 7h20a4.5 4.5 0 0 1 4.5 4.5v17a4.5 4.5 0 0 1-4.5 4.5h-20A4.5 4.5 0 0 1 4 28.5v-17Z" stroke="currentColor" stroke-width="2" />
+                  <path d="m33 16 10-6v20l-10-6V16Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round" />
+                  <circle cx="18.5" cy="20" r="6" stroke="currentColor" stroke-width="2" />
+                </svg>
+              </div>
+              <h2 id="empty-title">Your stage is ready</h2>
+              <p id="stage-message" role="status" aria-live="polite">Start the camera to bring your play space into ToyStage.</p>
+            </div>
+            <div id="live-overlay" class="live-overlay" hidden>
+              <span><span class="live-dot" aria-hidden="true"></span> LIVE PREVIEW</span>
+              <span>LOCAL ONLY</span>
+            </div>
+          </div>
+
+          <p class="stage-caption">Set up your play area in front of the camera. Chroma keying and digital scenes are coming next.</p>
+        </section>
+
+        <aside class="diagnostics" aria-labelledby="diagnostics-heading">
+          <div class="diagnostics-heading">
+            <div>
+              <p class="eyebrow">DEVICE CHECK</p>
+              <h2 id="diagnostics-heading">Diagnostics</h2>
+            </div>
+            <span class="diagnostic-icon" aria-hidden="true">⌁</span>
+          </div>
+
+          <dl class="diagnostic-list">
+            <div class="diagnostic-row">
+              <dt>Video size</dt>
+              <dd id="video-size">Waiting for camera</dd>
+            </div>
+            <div class="diagnostic-row">
+              <dt>Frame rate</dt>
+              <dd id="frame-rate">—</dd>
+            </div>
+            <div class="diagnostic-row">
+              <dt>Selected camera</dt>
+              <dd id="camera-name">—</dd>
+            </div>
+            <div class="diagnostic-row">
+              <dt>Browser</dt>
+              <dd id="browser-name">Checking…</dd>
+            </div>
+            <div class="diagnostic-row">
+              <dt>WebGL 2</dt>
+              <dd id="webgl-status">Checking…</dd>
+            </div>
+          </dl>
+
+          <p class="privacy-note"><span aria-hidden="true">◉</span> Live camera frames are shown in your browser. ToyStage does not upload or save them.</p>
+        </aside>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
