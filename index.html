@@ -37,6 +37,7 @@
             <video id="stage-video" autoplay muted playsinline hidden aria-hidden="true"></video>
             <canvas id="stage-canvas" class="stage-canvas" hidden role="img" aria-label="Live keyed camera over a chosen scene"></canvas>
             <canvas id="sensing-overlay" class="sensing-overlay" hidden aria-hidden="true"></canvas>
+            <canvas id="ball-overlay" class="ball-overlay" hidden aria-hidden="true"></canvas>
             <div id="empty-state" class="empty-state">
               <div class="camera-glyph" aria-hidden="true">
                 <svg viewBox="0 0 48 40" fill="none">
@@ -53,6 +54,19 @@
               <span>LOCAL ONLY</span>
             </div>
           </div>
+
+          <section class="ball-panel" aria-labelledby="ball-heading">
+            <div class="key-heading-row">
+              <div><p class="eyebrow">TOY MEETS WORLD</p><h2 id="ball-heading">Give it a nudge</h2></div>
+              <label class="toggle"><input id="ball-enabled" type="checkbox" checked /> Play ball</label>
+            </div>
+            <p class="key-help">Move a toy or hand into the golden ball. Try a gentle nudge, then a quicker swipe!</p>
+            <div class="ball-controls">
+              <button id="reset-ball" class="button button-primary" type="button" disabled>Reset ball</button>
+              <button id="place-ball" class="button button-secondary" type="button" disabled aria-pressed="false" aria-describedby="ball-status">Place ball</button>
+            </div>
+            <p id="ball-status" class="key-help" role="status" aria-live="polite">Start the camera to play.</p>
+          </section>
 
           <section class="scene-panel" aria-labelledby="scene-heading">
             <div class="key-heading-row">
@@ -144,12 +158,15 @@
             <p class="key-help">See the solid areas that toys and hands will use for interaction.</p>
             <label class="toggle"><input id="sensing-enabled" type="checkbox" checked /> Sense foreground</label>
             <label class="toggle"><input id="sensing-debug" type="checkbox" /> Show interaction mask</label>
+            <label class="toggle"><input id="ball-debug" type="checkbox" /> Show ball contact &amp; motion</label>
             <p class="key-help">Cyan marks solid foreground. Tap the stage to check a spot. Color picking pauses sensing.</p>
             <dl class="diagnostic-list">
               <div class="diagnostic-row"><dt>Mask size / rate</dt><dd id="sensing-rate">—</dd></div>
               <div class="diagnostic-row"><dt>Sensing / readback average</dt><dd id="sensing-time">—</dd></div>
               <div class="diagnostic-row"><dt>Solid / changed coverage</dt><dd id="sensing-coverage">—</dd></div>
+              <div class="diagnostic-row"><dt>Ball contact / motion / hits</dt><dd id="ball-diagnostics">Show ball contact &amp; motion to inspect hits.</dd></div>
             </dl>
+            <p class="key-help">Ball outline: cyan = clear, pink = contact, gray = paused. Dashed box = motion region; cyan arrow = estimated toy motion; pink arrow = last hit.</p>
             <p id="sensing-probe" class="key-help" role="status">Show the mask, then tap a toy or empty blanket.</p>
           </details>
         </aside>

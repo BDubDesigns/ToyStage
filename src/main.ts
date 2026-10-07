@@ -13,6 +13,9 @@ import { WebGLCompositor } from "./compositor";
 import type { RenderDiagnostics } from "./compositor";
 import type { ForegroundMask } from "./foreground-mask";
 import { colorFromHex, colorToHex, defaultChromaKeySettings } from "./chroma-key";
+import { Ball } from "./ball";
+import { drawBall } from "./ball-view";
+import type { CameraRect } from "./compositor-layout";
 
 const cameraButton = getElement<HTMLButtonElement>("camera-button");
 const cameraState = getElement<HTMLElement>("camera-state");
@@ -37,6 +40,66 @@ let renderer: WebGLCompositor | null = null;
 let session: AbortController | null = null;
 let removeTrackListener: (() => void) | null = null;
 
+const ball = new Ball();
+const ballEnabled = getElement<HTMLInputElement>("ball-enabled");
+const ballDebug = getElement<HTMLInputElement>("ball-debug");
+const ballOverlay = getElement<HTMLCanvasElement>("ball-overlay");
+const ballStatus = getElement<HTMLElement>("ball-status");
+const ballDiagnostics = getElement<HTMLElement>("ball-diagnostics");
+const resetBall = getElement<HTMLButtonElement>("reset-ball");
+const placeBall = getElement<HTMLButtonElement>("place-ball");
+let placingBall = false;
+let lastBallDiagnostics = 0;
+
+function setPlacingBall(value: boolean): void {
+  placingBall = value;
+  placeBall.setAttribute("aria-pressed", String(value));
+  placeBall.textContent = value ? "Cancel placement" : "Place ball";
+  canvas.classList.toggle("placing", value);
+  updateBallControls();
+}
+
+function updateBallControls(): void {
+  resetBall.disabled = placeBall.disabled = !activeStream || !ballEnabled.checked || sampling;
+  const message = !activeStream ? "Start the camera to play." : !ballEnabled.checked ? "Ball is off. Turn on Play ball when you're ready."
+    : sampling ? "Ball paused while you pick the blanket color."
+    : placingBall ? "Tap inside the live camera area to place the ball. Escape cancels."
+    : !keyEnabled.checked ? "Turn on Remove screen so the ball can sense your toys."
+    : !sensingEnabled.checked ? "Turn on Sense foreground in Interaction check to play."
+    : !ball.debug.fresh ? "Waiting for fresh camera input…"
+    : "Nudge the ball with a toy or hand. Reset brings it back to the middle.";
+  if (ballStatus.textContent !== message) ballStatus.textContent = message;
+}
+
+function updateBall(now: number, width: number, height: number, rect: CameraRect): void {
+  if (!renderer || !ballEnabled.checked || sampling) { ballOverlay.hidden = true; ball.pause(); return; }
+  ball.layout(width, height, rect);
+  if (keyEnabled.checked && !placingBall) ball.tick(now, renderer.foregroundMask);
+  else ball.pause();
+  ballOverlay.hidden = false;
+  drawBall(ballOverlay, ball, width, height, now, ballDebug.checked);
+  updateBallControls();
+  if (ballDebug.checked && now - lastBallDiagnostics >= 100) {
+    lastBallDiagnostics = now;
+    const d = ball.debug;
+    ballDiagnostics.textContent = `${d.fresh ? d.contact ? "Contact" : "Clear" : "Paused"} · ${(d.coverage * 100).toFixed(0)}% overlap · ${(d.changed * 100).toFixed(0)}% changed · toy ${d.motion ? Math.hypot(d.motion.x, d.motion.y).toFixed(2) : "—"} /s · hit ${Math.hypot(d.impulse.x, d.impulse.y).toFixed(2)} · ${d.hits} hits`;
+  }
+}
+
+ballEnabled.addEventListener("change", () => {
+  ball.reset();
+  ballOverlay.hidden = true;
+  setPlacingBall(false);
+});
+ballDebug.addEventListener("change", () => {
+  if (!ballDebug.checked) ballDiagnostics.textContent = "Show ball contact & motion to inspect hits.";
+});
+resetBall.addEventListener("click", () => { ball.reset(); setPlacingBall(false); });
+placeBall.addEventListener("click", () => {
+  setPlacingBall(!placingBall);
+  if (placingBall) canvas.scrollIntoView({ block: "center" });
+});
+
 const sensingEnabled = getElement<HTMLInputElement>("sensing-enabled");
 const sensingDebug = getElement<HTMLInputElement>("sensing-debug");
 const sensingOverlay = getElement<HTMLCanvasElement>("sensing-overlay");
@@ -50,6 +113,9 @@ let maskImage: ImageData | null = null;
 function updateMask(mask: ForegroundMask): void {
   sensingOverlay.hidden = !sensingDebug.checked || mask.timestamp === null;
   if (mask.timestamp === null) {
+    ball.pause();
+    ballOverlay.hidden = true;
+    if (ballDebug.checked) ballDiagnostics.textContent = `Paused · ${ball.debug.hits} hits`;
     sensingContext?.clearRect(0, 0, sensingOverlay.width, sensingOverlay.height);
     maskImage = null;
     sensingCoverage.textContent = "—";
@@ -163,10 +229,12 @@ function applyKeySettings(): void {
   for (const [input, output] of [[tolerance, "tolerance-value"], [softness, "softness-value"], [despill, "despill-value"]] as const) {
     getElement<HTMLOutputElement>(output).value = `${Math.round(Number(input.value) / Number(input.max) * 100)}%`;
   }
+  updateBallControls();
 }
 
 function setSampling(value: boolean): void {
   sampling = value;
+  if (value) setPlacingBall(false);
   renderer?.setSensingEnabled(sensingEnabled.checked && !sampling);
   sampleButton.textContent = value ? "Cancel color pick" : "Pick blanket color";
   sampleButton.setAttribute("aria-pressed", String(value));
@@ -190,8 +258,18 @@ sampleButton.addEventListener("click", () => {
 });
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && sampling) setSampling(false);
+  if (event.key === "Escape" && placingBall) setPlacingBall(false);
 });
 canvas.addEventListener("click", (event) => {
+  if (!sampling && placingBall) {
+    const bounds = canvas.getBoundingClientRect();
+    const x = (event.clientX - bounds.left) / bounds.width, y = (event.clientY - bounds.top) / bounds.height;
+    const b = ball.bounds;
+    if (x < b.x || x > b.x + b.width || y < b.y || y > b.y + b.height) return;
+    ball.reset(x, y);
+    setPlacingBall(false);
+    return;
+  }
   if (!sampling && sensingDebug.checked && renderer && renderer.foregroundMask.timestamp !== null) {
     const bounds = canvas.getBoundingClientRect();
     const x = (event.clientX - bounds.left) / bounds.width;
@@ -285,6 +363,7 @@ async function startCamera(): Promise<void> {
       mirrored: shouldMirrorPreview(track.getSettings().facingMode),
       onDiagnostics: updateRenderDiagnostics,
       onMask: updateMask,
+      onFrame: updateBall,
       onError: (error) => {
         releaseStream();
         showFailure(error, false, true);
@@ -293,6 +372,7 @@ async function startCamera(): Promise<void> {
     if (selectedScene.kind === "animated" || selectedImage) renderer.setScene(selectedScene, selectedImage);
     renderer.setSceneMotion(sceneMotion.checked);
     renderer.setSensingEnabled(sensingEnabled.checked);
+    ball.reset();
     renderer.start();
     applyKeySettings();
     sampleButton.disabled = false;
@@ -348,6 +428,9 @@ function releaseStream(): void {
   renderer = null;
   const stream = activeStream;
   activeStream = null;
+  ball.reset();
+  ballOverlay.hidden = true;
+  setPlacingBall(false);
   sampleButton.disabled = true;
   setSampling(false);
   stream?.getTracks().forEach((track) => track.stop());

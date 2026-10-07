@@ -8,6 +8,7 @@ import { CAMERA_FRAGMENT } from "./chroma-key-shader";
 import { SCENE_FRAGMENT } from "./scene-shader";
 import { getSceneUvScale } from "./scenes";
 import type { Scene } from "./scenes";
+import type { CameraRect } from "./compositor-layout";
 
 export interface RenderDiagnostics {
   fps: number;
@@ -30,6 +31,7 @@ interface CompositorOptions {
   onDiagnostics: (diagnostics: RenderDiagnostics | null) => void;
   onError: (error: Error) => void;
   onMask?: (mask: ForegroundMask) => void;
+  onFrame?: (now: number, width: number, height: number, cameraRect: CameraRect) => void;
 }
 
 const FRAME_INTERVAL = 1000 / 30;
@@ -357,5 +359,6 @@ export class WebGLCompositor {
       this.readbackTotal += this.sensor.readbackMs;
       this.options.onMask?.(this.foregroundMask);
     }
+    this.options.onFrame?.(now, this.canvas.width, this.canvas.height, rect);
   }
 }
