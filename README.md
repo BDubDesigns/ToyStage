@@ -27,9 +27,21 @@ npm run preview
 
 The diagnostics panel reports the camera's decoded size, reported frame rate and device label, browser version, and WebGL 2 availability. It also shows measured rendered FPS, average frame interval, average CPU upload/draw submission time, drawing-buffer size, and mirror state. CPU submission time does **not** measure GPU execution time. Measurements update about once per second and reset when rendering resumes after switching tabs.
 
-The rear camera is preferred where the browser supports facing-mode selection. User-facing previews are mirrored in the shader; environment-facing and unknown-facing previews are not. Video orientation comes from the browser's decoded `videoWidth`/`videoHeight`, including changes on rotation. The whole frame fits without cropping or stretching, inset over a procedural grid so both layers remain visible. The camera is still opaque: green-screen removal comes in issue #4.
+The rear camera is preferred where the browser supports facing-mode selection. User-facing previews are mirrored in the shader; environment-facing and unknown-facing previews are not. Video orientation comes from the browser's decoded `videoWidth`/`videoHeight`, including changes on rotation. The whole frame fits without cropping or stretching, inset over a procedural grid. The green screen becomes transparent to reveal that grid; scene backgrounds come in issue #5.
 
 The compositor targets 30 rendered frames per second, with a drawing buffer bounded to 1280×720 or 720×1280 depending on stage shape. It uploads from the hidden video directly into a GPU texture, without full-frame CPU readback. Rendering pauses in hidden tabs. Stop, camera failure, graphics-context loss, and page navigation release the stream and renderer resources; graphics-context loss displays a retry message.
+
+## Green-screen setup
+
+1. Light the blanket evenly and keep toys a little away from it to reduce reflected green.
+2. Start the camera, select **Pick blanket color**, and tap a clear patch of blanket in the preview. The original camera image appears while picking, even if that area was already transparent. Tap inside the image rather than the surrounding grid. Select **Cancel color pick** or press Escape to cancel. **Screen color** also allows manual, keyboard-accessible color selection.
+3. Increase **Remove more blanket** for shadows and wrinkles; decrease it if parts of toys or hands disappear.
+4. Adjust **Soften edges** to smooth the outline and **Reduce green fringe** to reduce green reflections.
+5. **Check cutout** shows white foreground, black removed areas, and gray feathered edges. Uncheck **Remove screen** to compare with the original camera. **Reset settings** restores the key color, all sliders, and both checkboxes.
+
+Color comparison uses brightness-normalized RGB chromaticity in the GPU shader, rather than exact RGB matching. Calibration samples a temporary 5×5 patch from the source video only when you tap; it follows the same fit, orientation, and mirror mapping as the preview. There is no full-frame CPU keying or continuous pixel readback. Neither sampled pixels nor settings are persisted. Settings survive camera stop/start in the current page and reset on reload. The visual cutout check is not the future low-resolution interaction mask.
+
+Known limitations: green toys or green clothing close to the blanket hue will also disappear. Near-black shadows, mixed-color lighting, motion blur, and glossy or transparent objects can produce noise, holes, or halos. Despill only reduces excess green near the key hue and cannot recover hidden object detail. Higher tolerance/softness can erode foreground edges. Better lighting and distance from the blanket help; this slice does not attempt professional matting or object recognition.
 
 ## Deployment
 
@@ -66,3 +78,5 @@ For the compositor slice, also check:
 - On the laptop and Pixel 10 Pro XL, leave the stage running for 30 seconds and record rendered FPS, frame interval, CPU submission time, camera size, and render size. The practical target is about 30 fps / 33 ms between rendered frames; slower cameras or device/browser load can reduce this. Synthetic browser checks cannot establish real-device performance.
 - Stop/start several times, switch away and return, then navigate away and back. Camera-off state should hide the canvas and reset diagnostics; returning from a hidden tab should resume without stale timing spikes.
 - To simulate context loss in desktop DevTools, run `document.querySelector('#stage-canvas').getContext('webgl2').getExtension('WEBGL_lose_context').loseContext()`. Expect a visible graphics error and camera release. To retry this deliberately forced loss, call the extension's `restoreContext()` first, then **Try again**.
+
+For chroma keying, try a bright green center, shadowed/wrinkled green, a fast-moving toy, a hand near the screen, and a glossy toy reflecting green. Pick the blanket color, adjust each slider live, compare against the original camera, and inspect the cutout check. Verify soft edges and reduced fringing without making hands transparent. Pick colors near each camera corner in portrait/landscape and on a mirrored user-facing camera; the surrounding grid must not be sampled. Reset during picking, stop/start, and stop during picking. Record visible limitations and device diagnostics after 30 seconds. Synthetic WebGL pixel checks establish shader behavior, but actual blanket/toy quality and mobile performance require these physical-device checks.

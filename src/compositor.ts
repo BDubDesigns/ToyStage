@@ -1,4 +1,7 @@
 import { getCameraRect, getRenderSize } from "./compositor-layout";
+import { defaultChromaKeySettings, getSamplePoint, sampleVideoColor } from "./chroma-key";
+import type { ChromaKeySettings, RGB } from "./chroma-key";
+import { CAMERA_FRAGMENT } from "./chroma-key-shader";
 
 export interface RenderDiagnostics {
   fps: number;
@@ -38,23 +41,6 @@ void main() {
   color = vec4(mix(base, vec3(0.28, 0.38, 0.29), grid * 0.55), 1.0);
 }`;
 
-const CAMERA = `#version 300 es
-precision mediump float;
-in vec2 v_uv;
-uniform sampler2D u_camera;
-uniform vec4 u_rect;
-uniform bool u_mirrored;
-out vec4 color;
-void main() {
-  vec2 uv = (v_uv - u_rect.xy) / u_rect.zw;
-  if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) discard;
-  // DOM video rows start at the top. Upload without UNPACK_FLIP_Y_WEBGL,
-  // then explicitly map stage-up to video-down and mirror only user cameras.
-  uv.y = 1.0 - uv.y;
-  if (u_mirrored) uv.x = 1.0 - uv.x;
-  color = vec4(texture(u_camera, uv).rgb, 1.0);
-}`;
-
 const FRAME_INTERVAL = 1000 / 30;
 
 export class WebGLCompositor {
@@ -65,6 +51,8 @@ export class WebGLCompositor {
   private vao: WebGLVertexArrayObject | null = null;
   private sizeUniform: WebGLUniformLocation | null = null;
   private rectUniform: WebGLUniformLocation | null = null;
+  private keySettings = defaultChromaKeySettings();
+  private keyUniforms: Record<string, WebGLUniformLocation | null> = {};
   private observer: ResizeObserver | null = null;
   private animationId: number | null = null;
   private running = false;
@@ -83,6 +71,16 @@ export class WebGLCompositor {
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, stencil: false, preserveDrawingBuffer: false });
     if (!gl) throw new Error("WebGL 2 is unavailable. Try a recent browser with hardware acceleration enabled.");
     this.gl = gl;
+  }
+
+  setChromaKey(settings: ChromaKeySettings): void {
+    this.keySettings = { ...settings, color: [...settings.color] };
+  }
+
+  sampleColor(x: number, y: number): RGB | null {
+    if (!this.running || this.video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return null;
+    const point = getSamplePoint(x, y, this.canvas.width, this.canvas.height, this.video.videoWidth, this.video.videoHeight, this.options.mirrored);
+    return point ? sampleVideoColor(this.video, point) : null;
   }
 
   start(): void {
@@ -122,6 +120,7 @@ export class WebGLCompositor {
     gl.deleteProgram(this.camera);
     this.texture = this.vao = this.background = this.camera = null;
     this.sizeUniform = this.rectUniform = null;
+    this.keyUniforms = {};
     this.textureWidth = this.textureHeight = 0;
     this.lastVideoTime = -1;
     if (!gl.isContextLost()) {
@@ -138,7 +137,7 @@ export class WebGLCompositor {
   private createResources(): void {
     const gl = this.gl;
     this.background = createProgram(gl, BACKGROUND);
-    this.camera = createProgram(gl, CAMERA);
+    this.camera = createProgram(gl, CAMERA_FRAGMENT);
     this.texture = gl.createTexture();
     this.vao = gl.createVertexArray();
     if (!this.texture || !this.vao) throw new Error("The graphics renderer could not allocate its resources.");
@@ -152,6 +151,9 @@ export class WebGLCompositor {
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
     this.sizeUniform = gl.getUniformLocation(this.background, "u_size");
     this.rectUniform = gl.getUniformLocation(this.camera, "u_rect");
+    for (const name of ["keyEnabled", "keyColor", "tolerance", "softness", "despill", "showMask"]) {
+      this.keyUniforms[name] = gl.getUniformLocation(this.camera, `u_${name}`);
+    }
     gl.useProgram(this.camera);
     gl.uniform1i(gl.getUniformLocation(this.camera, "u_camera"), 0);
     gl.uniform1i(gl.getUniformLocation(this.camera, "u_mirrored"), this.options.mirrored ? 1 : 0);
@@ -247,12 +249,22 @@ export class WebGLCompositor {
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, gl.RGBA, gl.UNSIGNED_BYTE, this.video);
       this.lastVideoTime = this.video.currentTime;
     }
+    gl.disable(gl.BLEND);
     gl.useProgram(this.background);
     gl.uniform2f(this.sizeUniform, this.canvas.width, this.canvas.height);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     const rect = getCameraRect(this.canvas.width, this.canvas.height, width, height);
     gl.useProgram(this.camera);
     gl.uniform4f(this.rectUniform, rect.x, rect.y, rect.width, rect.height);
+    const key = this.keySettings;
+    gl.uniform1i(this.keyUniforms.keyEnabled, key.enabled ? 1 : 0);
+    gl.uniform3f(this.keyUniforms.keyColor, ...key.color);
+    gl.uniform1f(this.keyUniforms.tolerance, key.tolerance);
+    gl.uniform1f(this.keyUniforms.softness, key.softness);
+    gl.uniform1f(this.keyUniforms.despill, key.despill);
+    gl.uniform1i(this.keyUniforms.showMask, key.showMask ? 1 : 0);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 }

@@ -53,7 +53,27 @@
             </div>
           </div>
 
-          <p class="stage-caption">The full camera frame sits over a test grid. Green-screen removal and scene selection are coming next.</p>
+          <section class="key-panel" aria-labelledby="key-heading">
+            <div class="key-heading-row">
+              <div><p class="eyebrow">GREEN-SCREEN SETUP</p><h2 id="key-heading">Make the blanket disappear</h2></div>
+              <label class="toggle"><input id="key-enabled" type="checkbox" checked /> Remove screen</label>
+            </div>
+            <p class="key-help">Start the camera, pick a clear patch of blanket, then adjust until your toys look right.</p>
+            <div class="calibration-row">
+              <button id="sample-color" class="button button-primary" type="button" disabled aria-pressed="false" aria-describedby="calibration-status">Pick blanket color</button>
+              <label class="color-control">Screen color <input id="key-color" type="color" value="#14cc1f" /></label>
+              <button id="reset-key" class="button button-secondary" type="button">Reset settings</button>
+            </div>
+            <p id="calibration-status" class="key-help" role="status" aria-live="polite">Start the camera to pick a color, or choose one with Screen color.</p>
+            <div class="key-sliders">
+              <label for="key-tolerance">Remove more blanket <output id="tolerance-value" for="key-tolerance">47%</output><input id="key-tolerance" type="range" min="0" max="0.6" step="0.01" value="0.28" aria-describedby="tolerance-help" /><span id="tolerance-help">Increase for shadows and wrinkles. Lower if toys disappear.</span></label>
+              <label for="key-softness">Soften edges <output id="softness-value" for="key-softness">30%</output><input id="key-softness" type="range" min="0" max="0.4" step="0.01" value="0.12" aria-describedby="softness-help" /><span id="softness-help">Smooth the outline. Too much can make toys see-through.</span></label>
+              <label for="key-despill">Reduce green fringe <output id="despill-value" for="key-despill">65%</output><input id="key-despill" type="range" min="0" max="1" step="0.01" value="0.65" aria-describedby="despill-help" /><span id="despill-help">Reduce reflected green around hands and toy edges.</span></label>
+            </div>
+            <label class="toggle mask-toggle"><input id="show-mask" type="checkbox" /> Check cutout <span>White stays; black disappears.</span></label>
+          </section>
+
+          <p class="stage-caption">The full camera frame sits over a test grid. Remove the blanket to reveal the test grid. Scene selection is coming next.</p>
         </section>
 
         <aside class="diagnostics" aria-labelledby="diagnostics-heading">
