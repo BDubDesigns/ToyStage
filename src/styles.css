@@ -145,3 +145,17 @@ h1 { margin-bottom: 0; font-size: clamp(22px, 3vw, 30px); font-weight: 700; lett
   .stage-frame { min-height: 220px; }
   .diagnostic-list { column-gap: 12px; }
 }
+
+.scene-panel { margin-top: 18px; padding: 18px; border: 1px solid var(--stroke); border-radius: 12px; background: var(--surface); }
+.scene-panel h2 { margin: 0; font-size: 17px; letter-spacing: -.025em; }
+.scene-picker { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+.scene-card { position: relative; min-width: 0; min-height: 88px; padding: 4px; border: 2px solid transparent; border-radius: 10px; background: var(--surface-raised); color: #d8e1dd; cursor: pointer; text-align: left; }
+.scene-card img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: cover; border-radius: 5px; }
+.scene-card > span { display: block; padding: 8px 5px 5px; font-size: 11px; font-weight: 700; line-height: 1.4; }
+.scene-card small { position: absolute; top: 9px; left: 9px; padding: 3px 5px; border-radius: 4px; background: #101619d9; color: #d8c8ff; font-size: 9px; }
+.scene-card[aria-pressed="true"] { border-color: var(--lime); background: #283326; color: var(--lime); }
+.scene-card:hover { background: #303d37; }
+.scene-status { margin: 12px 0 0; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.scene-status[data-error="true"] { color: #ffb3a8; }
+@media (max-width: 1050px) { .scene-picker { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 440px) { .scene-panel { padding: 13px; } .scene-picker { grid-template-columns: repeat(2, minmax(0, 1fr)); } }

@@ -6,7 +6,7 @@ export interface CameraRect {
 }
 
 // Stage-normalized coordinates; contain the whole frame with a small border so
-// the test background stays visible even when camera and stage aspects match.
+// the scene background stays visible even when camera and stage aspects match.
 export function getCameraRect(stageWidth: number, stageHeight: number, videoWidth: number, videoHeight: number): CameraRect {
   const scale = Math.min(stageWidth * 0.92 / videoWidth, stageHeight * 0.92 / videoHeight);
   const width = videoWidth * scale / stageWidth;

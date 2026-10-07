@@ -1,4 +1,6 @@
 import "./styles.css";
+import { SCENES, SceneImages } from "./scenes";
+import type { Scene } from "./scenes";
 import {
   getCameraErrorMessage,
   getUnsupportedCameraMessage,
@@ -33,6 +35,67 @@ let activeStream: MediaStream | null = null;
 let renderer: WebGLCompositor | null = null;
 let session: AbortController | null = null;
 let removeTrackListener: (() => void) | null = null;
+
+const scenePicker = getElement<HTMLElement>("scene-picker");
+const sceneStatus = getElement<HTMLElement>("scene-status");
+const sceneMotion = getElement<HTMLInputElement>("scene-motion");
+sceneMotion.checked = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const sceneImages = new SceneImages();
+// Cosmic Cruise is an asset-free fallback while the initial still loads.
+let selectedScene = SCENES[4];
+let selectedImage: HTMLImageElement | null = null;
+let selectionVersion = 0;
+const sceneButtons = new Map<string, HTMLButtonElement>();
+for (const scene of SCENES) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "scene-card";
+  button.setAttribute("aria-pressed", String(scene === selectedScene));
+  const image = document.createElement("img");
+  image.src = scene.thumbnail;
+  image.alt = "";
+  image.width = 160;
+  image.height = 90;
+  const label = document.createElement("span");
+  label.textContent = scene.name;
+  button.append(image, label);
+  if (scene.kind === "animated") {
+    const badge = document.createElement("small");
+    badge.textContent = "Animated";
+    button.append(badge);
+  }
+  button.addEventListener("click", () => { void selectScene(scene); });
+  sceneButtons.set(scene.id, button);
+  scenePicker.append(button);
+}
+function updateSceneButtons(scene: Scene): void {
+  for (const [id, button] of sceneButtons) button.setAttribute("aria-pressed", String(id === scene.id));
+}
+async function selectScene(scene: Scene): Promise<void> {
+  const version = ++selectionVersion;
+  updateSceneButtons(scene);
+  sceneStatus.textContent = `Loading ${scene.name}…`;
+  sceneStatus.removeAttribute("data-error");
+  try {
+    const image = await sceneImages.load(scene);
+    if (version !== selectionVersion) return;
+    selectedScene = scene;
+    selectedImage = image;
+    renderer?.setScene(scene, image);
+    sceneMotion.disabled = scene.kind !== "animated";
+    canvas.setAttribute("aria-label", `Live keyed camera over ${scene.name}`);
+    sceneStatus.textContent = scene.kind === "animated" ? `${scene.name} · watch for shooting stars and a visiting spaceship.` : `${scene.name} · ready for your toys.`;
+  } catch (error) {
+    if (version !== selectionVersion) return;
+    updateSceneButtons(selectedScene);
+    sceneMotion.disabled = selectedScene.kind !== "animated";
+    canvas.setAttribute("aria-label", `Live keyed camera over ${selectedScene.name}`);
+    sceneStatus.dataset.error = "true";
+    sceneStatus.textContent = error instanceof Error ? error.message : "Scene unavailable. Try again.";
+  }
+}
+sceneMotion.addEventListener("change", () => renderer?.setSceneMotion(sceneMotion.checked));
+void selectScene(SCENES[0]);
 
 const keyEnabled = getElement<HTMLInputElement>("key-enabled");
 const keyColor = getElement<HTMLInputElement>("key-color");
@@ -83,7 +146,7 @@ canvas.addEventListener("click", (event) => {
   try {
     const color = renderer.sampleColor((event.clientX - bounds.left) / bounds.width, (event.clientY - bounds.top) / bounds.height);
     if (!color) {
-      calibrationStatus.textContent = "Tap inside the camera image, away from the grid border.";
+      calibrationStatus.textContent = "Tap inside the camera image, away from the scene border.";
       return;
     }
     keySettings.color = color;
@@ -167,6 +230,8 @@ async function startCamera(): Promise<void> {
         showFailure(error, false, true);
       },
     });
+    if (selectedScene.kind === "animated" || selectedImage) renderer.setScene(selectedScene, selectedImage);
+    renderer.setSceneMotion(sceneMotion.checked);
     renderer.start();
     applyKeySettings();
     sampleButton.disabled = false;

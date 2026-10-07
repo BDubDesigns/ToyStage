@@ -35,7 +35,7 @@
 
           <div class="stage-frame" id="stage-frame">
             <video id="stage-video" autoplay muted playsinline hidden aria-hidden="true"></video>
-            <canvas id="stage-canvas" class="stage-canvas" hidden role="img" aria-label="Live camera composited over a test background"></canvas>
+            <canvas id="stage-canvas" class="stage-canvas" hidden role="img" aria-label="Live keyed camera over a chosen scene"></canvas>
             <div id="empty-state" class="empty-state">
               <div class="camera-glyph" aria-hidden="true">
                 <svg viewBox="0 0 48 40" fill="none">
@@ -52,6 +52,15 @@
               <span>LOCAL ONLY</span>
             </div>
           </div>
+
+          <section class="scene-panel" aria-labelledby="scene-heading">
+            <div class="key-heading-row">
+              <div><p class="eyebrow">PICK A WORLD</p><h2 id="scene-heading">Where will you play?</h2></div>
+              <label class="toggle"><input id="scene-motion" type="checkbox" checked disabled /> Animate space</label>
+            </div>
+            <div id="scene-picker" class="scene-picker" role="group" aria-label="Built-in scenes"></div>
+            <p id="scene-status" class="scene-status" role="status" aria-live="polite">Loading Enchanted Forest…</p>
+          </section>
 
           <section class="key-panel" aria-labelledby="key-heading">
             <div class="key-heading-row">
@@ -73,7 +82,7 @@
             <label class="toggle mask-toggle"><input id="show-mask" type="checkbox" /> Check cutout <span>White stays; black disappears.</span></label>
           </section>
 
-          <p class="stage-caption">The full camera frame sits over a test grid. Remove the blanket to reveal the test grid. Scene selection is coming next.</p>
+          <p class="stage-caption">Pick a world, then remove the blanket to put your toys inside it. You can switch worlds while the camera stays live.</p>
         </section>
 
         <aside class="diagnostics" aria-labelledby="diagnostics-heading">
