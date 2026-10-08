@@ -1,0 +1,109 @@
+name: ToyStage PR checks
+run-name: 'Preview PR #${{ github.event.pull_request.number || inputs.pr_number }}'
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open same-repository PR to test/build (for example 27). Run from main.
+        required: true
+        type: string
+
+# This workflow deliberately has NO deployment secrets or write permissions.
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-build-${{ github.event.pull_request.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.pr.outputs.pr_number }}
+      sha: ${{ steps.pr.outputs.sha }}
+      repository: ${{ steps.pr.outputs.repository }}
+    steps:
+      - name: Resolve an open PR and immutable head commit
+        id: pr
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          REQUESTED_PR: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const manual = context.eventName === 'workflow_dispatch';
+            if (manual && context.ref !== 'refs/heads/main') {
+              throw new Error('Manual preview builds must run the trusted workflow from main.');
+            }
+            const raw = manual ? process.env.REQUESTED_PR : String(context.payload.pull_request.number);
+            if (!/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(Number(raw))) {
+              throw new Error('pr_number must be a positive integer.');
+            }
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(raw) });
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            if (pr.state !== 'open' || pr.base.ref !== 'main' || pr.base.repo.full_name !== repository || !pr.head.repo) {
+              throw new Error('Select a real, still-open PR in this repository.');
+            }
+            if (manual && pr.head.repo.full_name !== repository) {
+              throw new Error('Manual preview builds only support same-repository PRs. Forks receive checks only.');
+            }
+            // An old event must not silently build a different commit after another push.
+            if (!manual && pr.head.sha !== context.payload.pull_request.head.sha) {
+              throw new Error('PR head changed; use the newest PR checks run.');
+            }
+            if (!/^[0-9a-f]{40}$/.test(pr.head.sha)) throw new Error('Invalid PR head SHA.');
+            core.setOutput('pr_number', raw);
+            core.setOutput('sha', pr.head.sha);
+            core.setOutput('repository', pr.head.repo.full_name);
+
+  build:
+    name: Test and build PR head
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the resolved PR head (not the merge ref)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: ${{ needs.resolve.outputs.repository }}
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          # Do not share an untrusted dependency cache with a privileged job.
+          package-manager-cache: false
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build app and bundled static assets
+        run: npm run build
+
+      - name: Validate preview workflow security cases when present
+        run: |
+          if [ -f scripts/check-preview-workflows.mjs ]; then
+            node scripts/check-preview-workflows.mjs
+          fi
+
+      - name: Upload static preview artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: preview-dist-pr-${{ needs.resolve.outputs.pr_number }}-${{ needs.resolve.outputs.sha }}
+          path: dist/
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7

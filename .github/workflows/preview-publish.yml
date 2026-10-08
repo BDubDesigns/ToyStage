@@ -1,0 +1,326 @@
+name: Publish Cloudflare PR preview
+
+on:
+  # workflow_run always loads this publisher from the default branch. Never
+  # replace this with pull_request_target + checkout of a PR-controlled ref.
+  workflow_run:
+    workflows: [ToyStage PR checks]
+    types: [completed]
+  workflow_dispatch:
+    # This manual trigger only provisions the empty project; it cannot deploy.
+
+permissions: {}
+
+jobs:
+  validate:
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: read
+    outputs:
+      pr_number: ${{ steps.source.outputs.pr_number }}
+      sha: ${{ steps.source.outputs.sha }}
+      artifact_id: ${{ steps.sanitized.outputs.artifact-id }}
+    steps:
+      - name: Authenticate the build run and artifact identity
+        id: source
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { data: run } = await github.rest.actions.getWorkflowRun({
+              ...context.repo, run_id: context.payload.workflow_run.id,
+            });
+            const repository = `${context.repo.owner}/${context.repo.repo}`;
+            if (run.conclusion !== 'success' || run.repository.full_name !== repository ||
+                run.head_repository?.full_name !== repository ||
+                run.path !== '.github/workflows/preview-build.yml' ||
+                !['pull_request', 'workflow_dispatch'].includes(run.event)) {
+              throw new Error('Not a successful same-repository PR checks run; no deployment.');
+            }
+            const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+              ...context.repo, run_id: run.id, per_page: 100,
+            });
+            const candidates = artifacts.filter(a => /^preview-dist-pr-[1-9][0-9]*-[0-9a-f]{40}$/.test(a.name));
+            if (candidates.length !== 1 || candidates[0].expired) {
+              throw new Error('Expected exactly one unexpired preview artifact from this successful run. Rebuild the PR.');
+            }
+            const artifact = candidates[0];
+            const [, number, sha] = /^preview-dist-pr-([1-9][0-9]*)-([0-9a-f]{40})$/.exec(artifact.name);
+            if (!Number.isSafeInteger(Number(number))) throw new Error('Invalid artifact PR number.');
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(number) });
+            if (pr.state !== 'open' || pr.base.ref !== 'main' || pr.base.repo.full_name !== repository ||
+                pr.head.repo?.full_name !== repository || pr.head.sha !== sha) {
+              throw new Error('PR is closed, forked, or superseded; rebuild its current head.');
+            }
+            if (run.event === 'pull_request') {
+              // Metadata supplied by GitHub, not PR-uploaded JSON. An empty association
+              // fails closed; use the trusted manual main workflow to bootstrap instead.
+              if (run.head_sha !== sha || run.head_branch !== pr.head.ref ||
+                  !run.pull_requests.some(p => p.number === pr.number && p.head.sha === sha &&
+                    p.head.repo.id === pr.head.repo.id && p.base.repo.id === pr.base.repo.id)) {
+                throw new Error('Artifact does not match this run\'s GitHub PR/commit association. Use a manual main build.');
+              }
+            } else if (run.head_branch !== 'main' || run.display_title !== `Preview PR #${number}`) {
+              // Only the main workflow can produce an accepted manual build. Its
+              // validated input is retained in GitHub's run title, outside the artifact.
+              throw new Error('Manual source run must be the main workflow for this PR number.');
+            }
+            if (artifact.size_in_bytes > 100 * 1024 * 1024) throw new Error('Preview artifact exceeds the 100 MiB budget.');
+            core.setOutput('pr_number', number);
+            core.setOutput('sha', sha);
+            core.setOutput('artifact_id', String(artifact.id));
+
+      - name: Download only the validated artifact from the triggering run
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ steps.source.outputs.artifact_id }}
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/preview-dist
+          merge-multiple: true
+
+      - name: Validate static content and add trusted MIME headers
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const fs = require('node:fs/promises');
+            const path = require('node:path');
+            const root = path.join(process.env.RUNNER_TEMP, 'preview-dist');
+            let count = 0, bytes = 0;
+            async function walk(directory) {
+              for (const name of await fs.readdir(directory)) {
+                const file = path.join(directory, name);
+                const relative = path.relative(root, file).split(path.sep).join('/');
+                // Prevent Wrangler from turning PR content into executable Functions,
+                // loading config/packages, or changing headers/redirects at publication.
+                if (!/^[A-Za-z0-9_./-]+$/.test(relative) || name.startsWith('.') ||
+                    /^(functions|_worker\.js|_routes\.json|_redirects|wrangler\.(toml|json|jsonc)|package(-lock)?\.json)$/i.test(name)) {
+                  throw new Error('Artifact contains a forbidden executable/config path. Only static assets are supported.');
+                }
+                const stat = await fs.lstat(file);
+                if (stat.isSymbolicLink() || (!stat.isFile() && !stat.isDirectory())) {
+                  throw new Error('Artifact must contain only regular files/directories, with no links.');
+                }
+                if (stat.isDirectory()) await walk(file);
+                else {
+                  if (stat.size > 25 * 1024 * 1024) throw new Error('Asset exceeds Cloudflare Pages\' 25 MiB limit.');
+                  count++; bytes += stat.size;
+                  if (count > 20000 || bytes > 100 * 1024 * 1024) throw new Error('Preview exceeds the file-count/100 MiB budget.');
+                }
+              }
+            }
+            await walk(root);
+            const index = await fs.lstat(path.join(root, 'index.html'));
+            if (!index.isFile() || index.size === 0) throw new Error('Artifact needs a nonempty index.html.');
+            await fs.writeFile(path.join(root, '_headers'),
+              '/pose/wasm/*.wasm\n  Content-Type: application/wasm\n/pose/*.task\n  Content-Type: application/octet-stream\n');
+            core.info(`Validated ${count} static files (${bytes} bytes).`);
+
+      - name: Upload the validated static artifact with a trusted uploader
+        id: sanitized
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: validated-preview-${{ github.run_id }}
+          path: ${{ runner.temp }}/preview-dist/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [validate]
+    # Provisioning is explicit, once, from main. Normal publication needs validation.
+    if: >-
+      always() &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_run' && needs.validate.result == 'success'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      pull-requests: write
+    concurrency:
+      group: preview-publish-${{ needs.validate.outputs.pr_number || 'provision' }}
+      cancel-in-progress: true
+    # NO checkout, PR scripts, dependency cache, or PR config in this job.
+    steps:
+      - name: Download the static artifact validated in this trusted workflow
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact_id }}
+          run-id: ${{ github.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/preview-dist
+          merge-multiple: true
+
+      - name: Create an empty directory for trusted Wrangler dependencies
+        if: github.event_name == 'workflow_run'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            await require('node:fs/promises').mkdir(require('node:path').join(process.env.RUNNER_TEMP, 'cloudflare-cli'));
+
+      - name: Recheck current PR before accessing Cloudflare
+        if: github.event_name == 'workflow_run'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+          PR_SHA: ${{ needs.validate.outputs.sha }}
+        with:
+          script: |
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: Number(process.env.PR_NUMBER) });
+            if (pr.state !== 'open' || pr.head.repo?.full_name !== `${context.repo.owner}/${context.repo.repo}` ||
+                pr.head.sha !== process.env.PR_SHA) throw new Error('PR changed or closed while queued; skip this stale deployment.');
+
+      - name: Provision or verify the isolated Direct Upload project
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        with:
+          script: |
+            const token = process.env.CLOUDFLARE_API_TOKEN, account = process.env.CLOUDFLARE_ACCOUNT_ID;
+            if (!token || !account) throw new Error('Configure the named CLOUDFLARE_API_TOKEN and CLOUDFLARE_ACCOUNT_ID Actions secrets.');
+            if (!/^[0-9a-f]{32}$/i.test(account)) throw new Error('CLOUDFLARE_ACCOUNT_ID is not a valid account ID.');
+            const base = `https://api.cloudflare.com/client/v4/accounts/${account}/pages/projects`;
+            const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+            const response = await fetch(`${base}/toystage-previews`, { headers });
+            let data = await response.json();
+            if (response.status === 404 && context.eventName === 'workflow_dispatch') {
+              const created = await fetch(base, { method: 'POST', headers,
+                body: JSON.stringify({ name: 'toystage-previews', production_branch: 'main' }) });
+              data = await created.json();
+              if (!created.ok || !data.success) {
+                throw new Error(`Project creation failed (HTTP ${created.status}). Check account Pages Edit permissions and project-name availability; no alternate project was created.`);
+              }
+            } else if (!response.ok || !data.success) {
+              throw new Error(`Preview project unavailable (HTTP ${response.status}). Run this publisher manually from main once to provision it; check Pages Edit permissions if that fails.`);
+            }
+            const project = data.result;
+            if (project.name !== 'toystage-previews' || project.production_branch !== 'main' || project.source ||
+                project.domains?.length) {
+              throw new Error('Refusing project: require toystage-previews, Direct Upload, production branch main, and no custom domains. Existing configuration was not changed.');
+            }
+            if (!/^[a-z0-9-]+\.pages\.dev$/.test(project.subdomain)) throw new Error('Cloudflare returned an invalid project subdomain.');
+            if (context.eventName === 'workflow_dispatch') {
+              await core.summary.addHeading('Preview project ready')
+                .addRaw(`Direct Upload project: toystage-previews; assigned hostname: ${project.subdomain}.\n\n`)
+                .addRaw('No app was deployed. Now run ToyStage PR checks from main with pr_number=27.\n').write();
+            }
+
+      - name: Set up Node.js for pinned Wrangler only
+        if: github.event_name == 'workflow_run'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 24
+          package-manager-cache: false
+
+      - name: Publish the static PR branch
+        if: github.event_name == 'workflow_run'
+        id: deployment
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          wranglerVersion: '4.148.0'
+          packageManager: npm
+          workingDirectory: ${{ runner.temp }}/cloudflare-cli
+          command: >-
+            pages deploy ../preview-dist --project-name toystage-previews
+            --branch pr-${{ needs.validate.outputs.pr_number }}
+            --commit-hash ${{ needs.validate.outputs.sha }}
+            --commit-dirty=true
+
+      - name: Verify actual HTTPS deployment and Pose assets before announcing
+        if: github.event_name == 'workflow_run'
+        id: verified
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          DEPLOYMENT_URL: ${{ steps.deployment.outputs.deployment-url }}
+          ALIAS_URL: ${{ steps.deployment.outputs.pages-deployment-alias-url }}
+          PAGES_ENVIRONMENT: ${{ steps.deployment.outputs.pages-environment }}
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+        with:
+          script: |
+            const fs = require('node:fs/promises');
+            const path = require('node:path');
+            const { createHash } = require('node:crypto');
+            const digest = bytes => createHash('sha256').update(bytes).digest('hex');
+            const version = new URL(process.env.DEPLOYMENT_URL);
+            const alias = new URL(process.env.ALIAS_URL);
+            for (const url of [version, alias]) {
+              if (url.protocol !== 'https:' || !/^[a-z0-9-]+\.[a-z0-9-]+\.pages\.dev$/.test(url.hostname) ||
+                  url.username || url.password || url.port || url.search || url.hash || url.pathname !== '/') {
+                throw new Error('Wrangler did not return a valid HTTPS Pages preview URL.');
+              }
+            }
+            if (process.env.PAGES_ENVIRONMENT !== 'preview' ||
+                alias.hostname !== `pr-${process.env.PR_NUMBER}.${version.hostname.split('.').slice(1).join('.')}`) {
+              throw new Error('Wrangler result is not the selected PR preview branch.');
+            }
+            const root = path.join(process.env.RUNNER_TEMP, 'preview-dist');
+            const checks = [{ file: 'index.html', type: 'text/html' }];
+            async function assets(directory) {
+              for (const entry of await fs.readdir(directory, { withFileTypes: true })) {
+                const file = path.join(directory, entry.name);
+                if (entry.isDirectory()) await assets(file);
+                else if (/\.(wasm|task)$/.test(entry.name)) checks.push({
+                  file: path.relative(root, file).split(path.sep).join('/'),
+                  type: entry.name.endsWith('.wasm') ? 'application/wasm' : 'application/octet-stream',
+                });
+              }
+            }
+            await assets(root);
+            // Verify bytes as well as status/MIME: an SPA fallback must not count as a model.
+            for (const check of checks) {
+              const expected = digest(await fs.readFile(path.join(root, check.file)));
+              for (const base of [version, alias]) {
+                let passed = false;
+                for (let attempt = 0; attempt < 6; attempt++) {
+                  try {
+                    const response = await fetch(new URL(check.file, base), {
+                      redirect: 'error', signal: AbortSignal.timeout(15000),
+                    });
+                    passed = response.status === 200 &&
+                      response.headers.get('content-type')?.split(';')[0].trim() === check.type &&
+                      digest(Buffer.from(await response.arrayBuffer())) === expected;
+                  } catch { passed = false; }
+                  if (passed) break;
+                  if (attempt < 5) await new Promise(resolve => setTimeout(resolve, 5000));
+                }
+                if (!passed) throw new Error(`Deployment uploaded but HTTPS content/MIME verification failed for ${check.file}. Inspect Cloudflare deployment; no ready link was posted.`);
+              }
+            }
+            core.setOutput('url', version.href);
+            core.setOutput('alias', alias.href);
+            await core.summary.addHeading(`Verified PR #${process.env.PR_NUMBER} preview`)
+              .addLink('Stable branch preview', alias.href).addRaw('\n\n')
+              .addLink('Versioned deployment', version.href).addRaw('\n\n')
+              .addRaw(`HTTPS status, MIME, and exact bytes passed for index.html and ${checks.length - 1} WASM/model assets.\n\n`)
+              .addRaw('Public URLs. Physical Pixel camera/Pose acceptance remains manual.\n').write();
+
+      - name: Update one preview link comment on the PR
+        if: github.event_name == 'workflow_run'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PR_NUMBER: ${{ needs.validate.outputs.pr_number }}
+          PR_SHA: ${{ needs.validate.outputs.sha }}
+          VERIFIED_URL: ${{ steps.verified.outputs.url }}
+          VERIFIED_ALIAS: ${{ steps.verified.outputs.alias }}
+        with:
+          script: |
+            const issue_number = Number(process.env.PR_NUMBER);
+            const { data: pr } = await github.rest.pulls.get({ ...context.repo, pull_number: issue_number });
+            if (pr.state !== 'open' || pr.head.sha !== process.env.PR_SHA) {
+              core.warning('PR moved during publication; do not announce this superseded build.');
+              return;
+            }
+            const marker = '<!-- toystage-cloudflare-preview -->';
+            const body = `${marker}\n**Verified HTTPS preview** for \`${process.env.PR_SHA}\`\n\n` +
+              `[Open stable preview](${process.env.VERIFIED_ALIAS}) · [This deployment](${process.env.VERIFIED_URL})\n\n` +
+              `Static HTTP/MIME/byte checks passed. Camera and Pose movement still need device testing. ` +
+              `These previews are public.\n\n[Publication log](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`;
+            const comments = await github.paginate(github.rest.issues.listComments, { ...context.repo, issue_number, per_page: 100 });
+            const previous = comments.find(c => c.user.login === 'github-actions[bot]' && c.body.includes(marker));
+            if (previous) await github.rest.issues.updateComment({ ...context.repo, comment_id: previous.id, body });
+            else await github.rest.issues.createComment({ ...context.repo, issue_number, body });

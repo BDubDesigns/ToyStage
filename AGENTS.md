@@ -88,6 +88,8 @@ Ball play lives in `src/ball.ts` (testable physics/contact), `src/ball-profiles.
 
 Production is served at `https://toystage.qcfailed.com` through GitHub Pages. `.github/workflows/pages.yml` deploys successful builds from `main`; see the README for the one-time Pages and DNS setup.
 
+PR checks live in `.github/workflows/preview-build.yml`: Node 24, `npm ci`, tests, and a build of the immutable PR head, without deployment secrets. `.github/workflows/preview-publish.yml` uses `workflow_run` and trusted default-branch code to validate/repackage static artifacts, then publish same-repository PRs to the separate `toystage-previews` Cloudflare Direct Upload project. Never checkout PR code, run its scripts, or restore its cache in the publisher. The publisher's manual main trigger provisions only the empty project; the checks workflow's manual main trigger builds an existing open PR by number. See README for bootstrap steps, public preview links, and device acceptance. Run `node scripts/check-preview-workflows.mjs` when changing this pipeline. Production workflow/DNS and vanity preview domains are outside this pipeline's scope.
+
 ## Testing expectations
 
 Testing strategy will evolve with the implementation, but every issue should verify the behavior it introduces.
