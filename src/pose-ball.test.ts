@@ -215,7 +215,8 @@ describe("Pose loss, stale input and lifecycle safety", () => {
   it.each(["gap", "teleport", "zeroed velocity", "old sample", "future sample"])("rejects %s instead of a phantom punch", reason => {
     const ball = new Ball(), contacts = new PoseBallContacts(), frame = samples(ball);
     contacts.tick(100, frame(100, hand(reason === "teleport" ? 0.05 : 0.35)), ball);
-    const at = reason === "gap" ? 300 : reason === "future sample" ? 250 : 150;
+    // A 200 ms gap is now expected at 5 Hz; use >260 ms for true loss.
+    const at = reason === "gap" ? 400 : reason === "future sample" ? 250 : 150;
     const input = hand(reason === "teleport" ? 0.6 : 0.45);
     if (reason === "zeroed velocity") input[JOINT.leftWrist].zeroVelocity = true;
     const now = reason === "old sample" ? 350 : reason === "future sample" ? 200 : at;
