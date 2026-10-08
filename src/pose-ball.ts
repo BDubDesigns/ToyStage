@@ -18,11 +18,19 @@ interface ContactHistory {
   clearSamples: number;
   hitAt: number;
 }
+interface BallSample {
+  at: number;
+  position: Vector;
+  velocity: Vector;
+}
 export interface PoseHit { part: BodyPart; speed: number; strength: number; at: number }
 
 // All contact distances/radii/speeds below use the SHORTER stage edge.
 export const POSE_CONTACT = Object.freeze({
-  maxAgeMs: 180, maxIntervalMs: 150, cooldownMs: 140,
+  // The 8–10 Hz mobile tracker takes ~80 ms to return each captured frame.
+  // A 5 Hz sample can be 320 ms old before the next result arrives: retain
+  // *history* longer than a render snapshot, but NEVER strike from stale input.
+  maxAgeMs: 260, maxIntervalMs: 260, historyRetentionMs: 420, cooldownMs: 140,
   minClosingSpeed: 0.12, rearmDistance: 0.012,
   maxDisplacement: 0.4, maxLimbSpeed: 8, maxImpulse: 3.2,
   handRadius: 0.026, footRadius: 0.035,
@@ -92,14 +100,48 @@ export class PoseBallContacts {
   private history = new Map<BodyPart, ContactHistory>();
   private capturedAt = -Infinity;
   private lastUsableAt = -Infinity;
+  // Render-cadence trajectory lets delayed camera frames collide against the
+  // ball's position AT CAPTURE, not where the ball is ~80–120 ms later.
+  private readonly ballSamples: BallSample[] = [];
 
   reset(): void {
     this.clearContacts();
     this.capturedAt = this.lastUsableAt = -Infinity;
     this.lastHit = null;
+    this.ballSamples.length = 0;
   }
 
   private clearContacts(): void { this.history.clear(); this.colliders = []; }
+
+  private recordBall(now: number, ball: Ball): void {
+    const sample: BallSample = {
+      at: now, position: { x: ball.x / ball.scaleX, y: ball.y / ball.scaleY },
+      velocity: { x: ball.vx, y: ball.vy },
+    };
+    const last = this.ballSamples[this.ballSamples.length - 1];
+    if (last?.at === now) this.ballSamples[this.ballSamples.length - 1] = sample;
+    else if (!last || now > last.at) this.ballSamples.push(sample);
+    while (this.ballSamples.length > 2 && this.ballSamples[1].at < now - 700) this.ballSamples.shift();
+  }
+
+  private ballAt(capturedAt: number, ball: Ball): BallSample {
+    const samples = this.ballSamples;
+    if (!samples.length) return { at: capturedAt,
+      position: toBallUnits(ball, ball.scaleX, ball.scaleY),
+      velocity: { x: ball.vx, y: ball.vy } };
+    if (capturedAt <= samples[0].at) return samples[0];
+    for (let i = 1; i < samples.length; i++) {
+      const end = samples[i], start = samples[i - 1];
+      if (capturedAt > end.at) continue;
+      const weight = Math.max(0, Math.min(1, (capturedAt - start.at) / (end.at - start.at)));
+      const mix = (a: Vector, b: Vector): Vector => ({
+        x: a.x + (b.x - a.x) * weight, y: a.y + (b.y - a.y) * weight,
+      });
+      return { at: capturedAt, position: mix(start.position, end.position),
+        velocity: mix(start.velocity, end.velocity) };
+    }
+    return samples[samples.length - 1];
+  }
 
   tick(now: number, frame: PoseFrame | null, ball: Ball): void {
     const pose = isPoseFresh(frame, now) ? frame.poses[0] : undefined;
@@ -109,15 +151,22 @@ export class PoseBallContacts {
     // resume seeds the clock, so time offscreen never becomes a giant step.
     if (now >= this.lastUsableAt && now - this.lastUsableAt <= POSE_FRESH_MS) ball.advance(now);
     else ball.pause();
+    this.recordBall(now, ball);
     if (!usable || !frame || now - frame.capturedAt > POSE_CONTACT.maxAgeMs) {
-      this.clearContacts(); ball.debug.contact = false; return;
+      // A delayed result is not itself a new strike. Don't erase valid sample
+      // history just because a render happened before the next worker result.
+      // A NEW unusable pose does invalidate it immediately; true gaps expire.
+      if ((frame && isPoseFresh(frame, now) && frame.capturedAt > this.capturedAt && !usable)
+          || now - this.capturedAt > POSE_CONTACT.historyRetentionMs) this.clearContacts();
+      ball.debug.contact = false; return;
     }
     if (frame.capturedAt <= this.capturedAt) return; // Repeated/out-of-order frames.
     this.capturedAt = frame.capturedAt;
     this.colliders = poseColliders(pose, ball);
     const active = new Set(this.colliders.map(c => c.part));
     for (const part of this.history.keys()) if (!active.has(part)) this.history.delete(part);
-    const center = toBallUnits(ball, ball.scaleX, ball.scaleY);
+    const sampledBall = this.ballAt(frame.capturedAt, ball);
+    const center = sampledBall.position;
     ball.debug.contact = false;
     for (const collider of this.colliders) {
       const previous = this.history.get(collider.part);
@@ -149,7 +198,8 @@ export class PoseBallContacts {
       const normal = sweptContact(previous.collider, collider, previous.ball, center, radius);
       if (!normal) continue;
       state.touching = true; state.clearSamples = 0;
-      const closing = (velocity.x - ball.vx) * normal.x + (velocity.y - ball.vy) * normal.y;
+      const closing = (velocity.x - sampledBall.velocity.x) * normal.x
+        + (velocity.y - sampledBall.velocity.y) * normal.y;
       if (closing < POSE_CONTACT.minClosingSpeed || now - state.hitAt < POSE_CONTACT.cooldownMs) continue;
       const strength = Math.min(POSE_CONTACT.maxImpulse, 0.16 + closing * 1.55);
       ball.applyImpulse(now, { x: normal.x * strength, y: normal.y * strength });
