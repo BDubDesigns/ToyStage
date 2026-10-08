@@ -1,3 +1,4 @@
+import { blockedNetworkRequests } from "./worker-network-policy";
 import { FilesetResolver, PoseLandmarker } from "@mediapipe/tasks-vision";
 import type { PoseWorkerRequest, PoseWorkerResponse } from "./pose-protocol";
 
@@ -36,7 +37,7 @@ self.onmessage = (event: MessageEvent<PoseWorkerRequest>) => {
     const start = performance.now();
     const result = landmarker.detectForVideo(message.bitmap, message.token.capturedAt);
     send({ type: "result", token: message.token, landmarks: result.landmarks,
-      inferenceMs: performance.now() - start, completedAtEpoch: performance.timeOrigin + performance.now() });
+      inferenceMs: performance.now() - start, completedAtEpoch: performance.timeOrigin + performance.now(), blockedNetworkRequests: blockedNetworkRequests() });
   } catch (error) {
     send({ type: "error", message: error instanceof Error ? error.message : "Pose inference failed." });
   } finally {

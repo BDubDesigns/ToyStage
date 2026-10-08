@@ -1,0 +1,33 @@
+{
+  "packages": {
+    "@tensorflow-models/pose-detection": "2.1.3",
+    "@tensorflow/tfjs-core": "4.22.0",
+    "@tensorflow/tfjs-converter": "4.22.0",
+    "@tensorflow/tfjs-backend-wasm": "4.22.0"
+  },
+  "modelVersion": "MoveNet SinglePose Lightning float16 v4",
+  "modelSource": "https://www.kaggle.com/api/v1/models/google/movenet/tfJs/singlepose-lightning/4/download",
+  "license": "Apache-2.0",
+  "files": {
+    "group1-shard1of2.bin": {
+      "bytes": 4194304,
+      "sha256": "b42c3232bf13b0efc691d3f0693dd3fc74404f709b1deee0a271828af6dbbea2"
+    },
+    "group1-shard2of2.bin": {
+      "bytes": 455912,
+      "sha256": "8253ab965aa3122c08f331777ca395ce9ca19bb9e7cb278b99de1c46dbdeb6dc"
+    },
+    "model.json": {
+      "bytes": 168013,
+      "sha256": "c65a3447162efa0c42af29498a4b151f4415b36ff3ae6fae2b28a32e840dcbfb"
+    },
+    "wasm/tfjs-backend-wasm-simd.wasm": {
+      "bytes": 424594,
+      "sha256": "77ebb28a6d34f371dbbf2086b7f2de8994acd8ea5a3cf1fa24d2c26c840cac7b"
+    },
+    "wasm/tfjs-backend-wasm.wasm": {
+      "bytes": 311123,
+      "sha256": "70a5d516060464e5269f01c74bac1772d6b8ab6cb612acf16b5cdaf61f78d892"
+    }
+  }
+}

@@ -12,9 +12,9 @@ export type PoseWorkerRequest =
   | { type: "frame"; token: FrameToken; bitmap: ImageBitmap };
 
 export type PoseWorkerResponse =
-  | { type: "ready" }
-  | { type: "error"; message: string }
-  | { type: "result"; token: FrameToken; landmarks: ImageLandmark[][]; inferenceMs: number; completedAtEpoch: number };
+  | { type: "ready"; backend?: string }
+  | { type: "error"; message: string; unsupported?: boolean }
+  | { type: "result"; token: FrameToken; landmarks: ImageLandmark[][]; inferenceMs: number; completedAtEpoch: number; blockedNetworkRequests?: number };
 
 // One slot covers BOTH async capture and worker inference. Invalidation keeps
 // the old slot occupied until its capture/result finishes, never overlapping work.
@@ -25,11 +25,17 @@ export class PoseFrameGate {
   private lastSample = -Infinity;
   private pending: FrameToken | null = null;
   skipped = 0;
+  lastOutcome: "accepted" | "duplicate" | "backpressure" | "cadence" = "duplicate";
 
   reserve(now: number, mediaTime: number): FrameToken | null {
+    this.lastOutcome = "duplicate";
     if (!Number.isFinite(mediaTime) || mediaTime === this.lastMediaTime) return null;
     this.lastMediaTime = mediaTime;
-    if (this.pending || now - this.lastSample < 1000 / 18) { this.skipped++; return null; }
+    if (this.pending || now - this.lastSample < 1000 / 18) {
+      this.lastOutcome = this.pending ? "backpressure" : "cadence";
+      this.skipped++; return null;
+    }
+    this.lastOutcome = "accepted";
     this.lastSample = now;
     return this.pending = Object.freeze({ generation: this.generation, frameId: ++this.frameId, capturedAt: now, mediaTime });
   }

@@ -46,6 +46,7 @@
             <canvas id="ball-overlay" class="ball-overlay" hidden aria-hidden="true"></canvas>
             <canvas id="pose-canvas" class="stage-canvas" hidden role="img" aria-label="Digital stick figure following your body; camera image hidden"></canvas>
             <div id="pose-prompt" class="pose-prompt" hidden role="status" aria-live="polite">Step back so your body is in view.</div>
+            <div id="benchmark-hud" class="benchmark-hud" hidden></div>
             <div id="empty-state" class="empty-state">
               <div class="camera-glyph" aria-hidden="true">
                 <svg viewBox="0 0 48 40" fill="none">
@@ -79,6 +80,30 @@
             <p class="key-help">Prop up your phone and step back until it can see your head and feet. Raise an arm, lean, or try a squat. Your camera image stays hidden.</p>
             <p id="pose-status" class="key-help" role="status" aria-live="polite">Start the camera when you have room to move.</p>
             <button id="pose-retry" class="button button-secondary" type="button" hidden>Retry Pose Mode</button>
+          </section>
+
+          <section id="pose-benchmark" class="pose-panel benchmark-panel" aria-labelledby="benchmark-heading" hidden>
+            <p class="eyebrow">LOCAL MEASUREMENT · OPT-IN</p>
+            <h2 id="benchmark-heading">Pose tracking benchmark</h2>
+            <p class="key-help">Keep the same camera, lighting, distance and full-body view for both models. Each run loads one worker, warms up for 10 seconds, then measures for 60 seconds. Start with A then B; for ABBA, repeat B then A. Cool the phone between runs.</p>
+            <label class="benchmark-select" for="benchmark-model">Tracking model
+              <select id="benchmark-model"><option value="mediapipe">A · MediaPipe Lite / CPU worker</option><option value="movenet">B · MoveNet Lightning / WASM worker</option></select>
+            </label>
+            <div class="ball-controls">
+              <button id="benchmark-run" class="button button-primary" type="button" disabled>Start 70-second run</button>
+              <button id="benchmark-stop" class="button button-secondary" type="button" disabled>Use normal Pose</button>
+            </div>
+            <p id="benchmark-status" class="key-help" role="status" aria-live="polite">Start the camera in Pose Mode to begin.</p>
+            <p id="benchmark-live" class="key-help">Cyan = left wrist, coral = right wrist, lime = nose. Compare slow and fast reaches, head leans and squats.</p>
+            <p class="key-help">The common overlay uses measured joints without added smoothing or prediction. No camera image is shown. Changing tabs, camera, mode or orientation interrupts the run. Availability and confidence scores do not prove accuracy. MoveNet omits toes, heels and fingers; this does not change game tracking.</p>
+            <details>
+              <summary>Local report · latest four runs</summary>
+              <p class="key-help">No report is uploaded or saved automatically. Copy it before reloading. Include your phone/browser, heat and perceived lag notes when sharing. Physical Pixel results and recommendation remain pending.</p>
+              <label for="benchmark-output">Copyable JSON summary</label>
+              <textarea id="benchmark-output" rows="12" readonly spellcheck="false"></textarea>
+              <div class="ball-controls"><button id="benchmark-copy" class="button button-secondary" type="button">Copy summary</button><button id="benchmark-clear" class="button button-secondary" type="button">Clear report</button></div>
+              <p id="benchmark-copy-status" class="key-help" role="status"></p>
+            </details>
           </section>
 
           <section class="ball-panel" data-green-screen aria-labelledby="ball-heading">

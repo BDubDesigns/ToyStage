@@ -2,7 +2,17 @@ import { PoseFrameGate } from "./pose-protocol";
 import type { FrameToken, PoseWorkerRequest, PoseWorkerResponse } from "./pose-protocol";
 import { PoseSmoother } from "./pose-smoothing";
 import { isPoseFresh, POSE_FRESH_MS } from "./pose-types";
-import type { PoseFrame, PoseLayout } from "./pose-types";
+import type { ImageLandmark, PoseFrame, PoseLayout } from "./pose-types";
+
+// Benchmark-only raw observations never enter the production 33-joint snapshots.
+export interface PoseObservation {
+  readonly token: FrameToken;
+  readonly landmarks: readonly (readonly ImageLandmark[])[];
+  readonly receivedAt: number;
+  readonly inferenceMs: number;
+  readonly captureMs: number;
+  readonly roundTripMs: number;
+}
 
 export interface PoseWorkerPort {
   onmessage: ((event: MessageEvent<PoseWorkerResponse>) => void) | null;
@@ -18,6 +28,9 @@ interface TrackerOptions {
   now?: () => number;
   timeOrigin?: number;
   assetsUrl?: string;
+  rawOnly?: boolean;
+  onObservation?: (observation: PoseObservation) => void;
+  onAttempt?: (now: number, outcome: PoseFrameGate["lastOutcome"]) => void;
 }
 
 export interface PoseDiagnostics {
@@ -31,6 +44,8 @@ export interface PoseDiagnostics {
   readonly busy: boolean;
   readonly sampleWidth: number;
   readonly sampleHeight: number;
+  readonly backend: string;
+  readonly blockedNetworkRequests: number;
 }
 
 export function getPoseSampleSize(width: number, height: number): { width: number; height: number } {
@@ -58,6 +73,8 @@ export class PoseTracker {
   private sampleWidth = 0;
   private sampleHeight = 0;
   private readonly now: () => number;
+  private backend = "CPU worker";
+  private blockedNetworkRequests = 0;
 
   constructor(private readonly options: TrackerOptions = {}) {
     this.now = options.now ?? (() => performance.now());
@@ -93,8 +110,8 @@ export class PoseTracker {
   }
 
   private receive(message: PoseWorkerResponse): void {
-    if (message.type === "error") { this.fail(message.message); return; }
-    if (message.type === "ready") { this.clearTimeout(); this.state = "ready"; return; }
+    if (message.type === "error") { this.fail(message.message); if (message.unsupported) this.state = "unsupported"; return; }
+    if (message.type === "ready") { this.clearTimeout(); this.state = "ready"; this.backend = message.backend ?? "CPU worker"; return; }
     const sent = this.sent;
     // An unknown/out-of-order result must not release another frame's slot.
     if (!sent || sent.token.frameId !== message.token.frameId || sent.token.generation !== message.token.generation) return;
@@ -104,10 +121,14 @@ export class PoseTracker {
     const now = this.now();
     if (!current || !this.accepting) return;
     this.count++;
+    this.blockedNetworkRequests = message.blockedNetworkRequests ?? this.blockedNetworkRequests;
     const average = (old: number, value: number) => old ? old * 0.8 + value * 0.2 : value;
     this.inferenceMs = average(this.inferenceMs, message.inferenceMs);
     this.captureMs = average(this.captureMs, sent.captureMs);
     this.roundTripMs = average(this.roundTripMs, now - sent.at);
+    this.options.onObservation?.({ token: message.token, landmarks: message.landmarks, receivedAt: now,
+      inferenceMs: message.inferenceMs, captureMs: sent.captureMs, roundTripMs: now - sent.at });
+    if (this.options.rawOnly) return;
     if (now - message.token.capturedAt > POSE_FRESH_MS) { this.clearHistory(); return; }
     const poses = message.landmarks.slice(0, 1).map((landmarks) => this.smoother.update(landmarks, message.token.capturedAt, this.layout));
     if (!poses.length) this.smoother.reset();
@@ -122,6 +143,7 @@ export class PoseTracker {
   sample(video: HTMLVideoElement, now: number, mediaTime: number): void {
     if (this.state !== "ready" || !this.accepting || !this.worker || video.readyState < 2 || !video.videoWidth || !video.videoHeight) return;
     const token = this.gate.reserve(now, mediaTime);
+    this.options.onAttempt?.(now, this.gate.lastOutcome);
     if (!token) return;
     const worker = this.worker;
     const size = getPoseSampleSize(video.videoWidth, video.videoHeight);
@@ -173,7 +195,8 @@ export class PoseTracker {
     }
     return Object.freeze({ state: this.state, error: this.error, samplesHz: this.samplesHz,
       inferenceMs: this.inferenceMs, captureMs: this.captureMs, roundTripMs: this.roundTripMs,
-      skipped: this.gate.skipped, busy: this.gate.busy, sampleWidth: this.sampleWidth, sampleHeight: this.sampleHeight });
+      skipped: this.gate.skipped, busy: this.gate.busy, sampleWidth: this.sampleWidth, sampleHeight: this.sampleHeight, backend: this.backend,
+      blockedNetworkRequests: this.blockedNetworkRequests });
   }
 
   private fail(message: string): void { this.stop(); this.state = "error"; this.error = message; }
@@ -190,5 +213,6 @@ export class PoseTracker {
     this.state = "off";
     this.count = this.samplesHz = this.inferenceMs = this.captureMs = this.roundTripMs = 0;
     this.sampleWidth = this.sampleHeight = 0;
+    this.blockedNetworkRequests = 0;
   }
 }
