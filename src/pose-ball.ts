@@ -30,7 +30,9 @@ export const POSE_CONTACT = Object.freeze({
   // The 8–10 Hz mobile tracker takes ~80 ms to return each captured frame.
   // A 5 Hz sample can be 320 ms old before the next result arrives: retain
   // *history* longer than a render snapshot, but NEVER strike from stale input.
-  maxAgeMs: 260, maxIntervalMs: 260, historyRetentionMs: 420, cooldownMs: 140,
+  // Old results must not generate delayed phantom hits, even though their
+  // sample *history* may safely bridge the next valid result.
+  maxAgeMs: 170, maxIntervalMs: 260, historyRetentionMs: 420, cooldownMs: 140,
   minClosingSpeed: 0.12, rearmDistance: 0.012,
   maxDisplacement: 0.4, maxLimbSpeed: 8, maxImpulse: 3.2,
   handRadius: 0.026, footRadius: 0.035,
