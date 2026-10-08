@@ -342,7 +342,7 @@ test('network/JSON errors are redacted instead of printing API request or respon
   }
 });
 
-test('HTTPS smoke checks reject wrong MIME, fallback HTML, redirects, and guessed hosts', async () => {
+test('HTTPS smoke checks use canonical Pages root and reject wrong MIME, fallback HTML, redirects, and guessed hosts', async () => {
   await staticFixture(async (temp, root) => {
     await mkdir(path.join(root, 'pose', 'wasm'), { recursive: true });
     await writeFile(path.join(root, 'pose', 'wasm', 'vision.wasm'), 'wasm-fixture');
@@ -350,19 +350,41 @@ test('HTTPS smoke checks reject wrong MIME, fallback HTML, redirects, and guesse
     const env = { RUNNER_TEMP: temp, PR_NUMBER: '27', PAGES_ENVIRONMENT: 'preview',
       DEPLOYMENT_URL: 'https://abcdef.toystage-previews-unique.pages.dev',
       ALIAS_URL: 'https://pr-27.toystage-previews-unique.pages.dev' };
-    const serve = async url => {
-      const file = new URL(url).pathname.slice(1);
+    const requests = [];
+    const serve = async (url, options) => {
+      const pathname = new URL(url).pathname;
+      requests.push({ url, redirect: options?.redirect });
+      // Pages redirects /index.html to /. The verifier must never request it.
+      if (pathname === '/index.html') throw new Error('Pages canonical redirect');
+      const file = pathname === '/' ? 'index.html' : pathname.slice(1);
       const bytes = await readFile(path.join(root, file));
       return { status: 200, headers: { get: () => file.endsWith('.wasm') ? 'application/wasm' :
         file.endsWith('.task') ? 'application/octet-stream' : 'text/html; charset=utf-8' },
         arrayBuffer: async () => bytes };
     };
     assert.equal((await execute(verify, fixture({ env, fetch: serve }))).alias, `${env.ALIAS_URL}/`);
+    assert.deepEqual([...new Set(requests.map(r => new URL(r.url).pathname))].sort(),
+      ['/', '/pose/model.task', '/pose/wasm/vision.wasm']);
+    assert.equal(requests.filter(r => new URL(r.url).pathname === '/').length, 2);
+    assert.deepEqual([...new Set(requests.map(r => new URL(r.url).origin))].sort(),
+      [env.DEPLOYMENT_URL, env.ALIAS_URL].sort());
+    assert.ok(requests.every(r => r.redirect === 'error'));
     for (const fetch of [async () => ({ status: 302, headers: { get: () => '' } }),
       async url => ({ ...await serve(url), headers: { get: () => 'text/html' } }),
       async url => ({ ...await serve(url), arrayBuffer: async () => Buffer.from('fallback HTML') })]) {
       await assert.rejects(execute(verify, fixture({ env, fetch })), /verification failed/);
     }
+    // A healthy homepage must not hide an asset redirect or a blocked redirect.
+    const redirectedAsset = async (url, options) => new URL(url).pathname.endsWith('.wasm')
+      ? { status: 308, headers: { get: () => 'text/html' } } : serve(url, options);
+    await assert.rejects(execute(verify, fixture({ env, fetch: redirectedAsset })),
+      /verification failed for pose\/wasm\/vision.wasm: HTTP 308/);
+    const blockedAsset = async (url, options) => {
+      if (new URL(url).pathname.endsWith('.task')) throw new TypeError('redirect blocked');
+      return serve(url, options);
+    };
+    await assert.rejects(execute(verify, fixture({ env, fetch: blockedAsset })),
+      /verification failed for pose\/model.task: request failed or redirect rejected/);
     for (const changed of [{ ...env, ALIAS_URL: 'https://pr-28.toystage-previews-unique.pages.dev' },
       { ...env, DEPLOYMENT_URL: 'https://toystage.qcfailed.com' }, { ...env, PAGES_ENVIRONMENT: 'production' }]) {
       await assert.rejects(execute(verify, fixture({ env: changed, fetch: serve })));

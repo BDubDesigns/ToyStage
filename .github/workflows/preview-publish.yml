@@ -316,24 +316,29 @@ jobs:
               }
             }
             await assets(root);
+            // Pages redirects /index.html to /. Verify built index.html at the canonical /,
+            // while retaining exact-path, no-redirect checks for model/WASM assets.
             // Verify bytes as well as status/MIME: an SPA fallback must not count as a model.
             for (const check of checks) {
               const expected = digest(await fs.readFile(path.join(root, check.file)));
+              const requestPath = check.file === 'index.html' ? '/' : `/${check.file}`;
               for (const base of [version, alias]) {
-                let passed = false;
+                let passed = false, lastFailure = 'request failed';
                 for (let attempt = 0; attempt < 6; attempt++) {
                   try {
-                    const response = await fetch(new URL(check.file, base), {
+                    const response = await fetch(new URL(requestPath, base), {
                       redirect: 'error', signal: AbortSignal.timeout(15000),
                     });
-                    passed = response.status === 200 &&
-                      response.headers.get('content-type')?.split(';')[0].trim() === check.type &&
-                      digest(Buffer.from(await response.arrayBuffer())) === expected;
-                  } catch { passed = false; }
+                    const mime = response.headers.get('content-type')?.split(';')[0].trim();
+                    if (response.status !== 200) lastFailure = `HTTP ${response.status}`;
+                    else if (mime !== check.type) lastFailure = 'unexpected MIME type';
+                    else if (digest(Buffer.from(await response.arrayBuffer())) !== expected) lastFailure = 'content bytes differ';
+                    else passed = true;
+                  } catch { lastFailure = 'request failed or redirect rejected'; }
                   if (passed) break;
                   if (attempt < 5) await new Promise(resolve => setTimeout(resolve, 5000));
                 }
-                if (!passed) throw new Error(`Deployment uploaded but HTTPS content/MIME verification failed for ${check.file}. Inspect Cloudflare deployment; no ready link was posted.`);
+                if (!passed) throw new Error(`Deployment uploaded but HTTPS content/MIME verification failed for ${check.file}: ${lastFailure}. Inspect Cloudflare deployment; no ready link was posted.`);
               }
             }
             core.setOutput('url', version.href);
