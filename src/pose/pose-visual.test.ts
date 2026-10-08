@@ -23,12 +23,12 @@ function frame(capturedAt: number, x: number, velocity = 0, visible = true): Pos
 describe("render-only pose temporal filter", () => {
   it("reduces jumpy screen updates between 8Hz captures without modifying physics snapshots", () => {
     const visual = new PoseVisualFilter(), original = frame(100, 0.36, 1);
-    const first = visual.positions(original, 180)!;
-    expect(first[JOINT.leftWrist].x).toBeCloseTo(0.44);
+    const first = visual.positions(original, 140)!;
+    expect(first[JOINT.leftWrist].x).toBeCloseTo(0.40);
     expect(original.poses[0].landmarks[JOINT.leftWrist].x).toBe(0.36);
     // Repeated same snapshot gently moves the displayed joint toward a
     // bounded extrapolation instead of leaving it at the last inference tick.
-    const repeat = visual.positions(original, 213)!;
+    const repeat = visual.positions(original, 173)!;
     expect(repeat[JOINT.leftWrist].x).toBeGreaterThan(first[JOINT.leftWrist].x);
     expect(repeat[JOINT.leftWrist].x).toBeLessThanOrEqual(0.44);
     const next = visual.positions(frame(225, 0.49, 0.8), 305)!;
