@@ -104,7 +104,7 @@ export class PoseController {
     this.updateLayout();
     if (!this.video.requestVideoFrameCallback) this.tracker.sample(this.video, performance.now(), this.video.currentTime);
     const frame = this.tracker.snapshot(now);
-    this.view.draw(frame, this.rect());
+    this.view.draw(frame, this.rect(), now);
     this.callbacks?.onFrame(now, frame, this.canvas.width, this.canvas.height, this.rect());
     if (this.lastFrame) this.frameTotal += now - this.lastFrame;
     this.lastFrame = now; this.frames++; this.drawTotal += performance.now() - start;
