@@ -158,6 +158,68 @@ At the DNS provider for `qcfailed.com`, create this record:
 
 The custom domain is configured in GitHub Pages settings. A repository-root `CNAME` file is not used for this Actions deployment.
 
+### Cloudflare PR previews
+
+PR previews use a **separate Cloudflare Pages Direct Upload project**, `toystage-previews`. They require no Cloudflare↔GitHub integration. Production continues to use the unchanged `pages.yml` GitHub Pages workflow and existing DNS above. The preview workflows do not deploy on pushes to `main`, change DNS, or publish to `toystage.qcfailed.com`.
+
+The repository Actions secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` are already configured by the owner. The token must have **Account → Cloudflare Pages → Edit** for the intended account. Their values belong only in Actions secrets; do not paste them into code, commands, PRs, or logs.
+
+#### One-time provisioning and the existing PR #27
+
+These steps become available **after this infrastructure PR is reviewed and merged**. The privileged `workflow_run` publisher and manual dispatches need their workflow files on the default branch. No preview project or live URL is established merely by adding the files.
+
+1. Open the repository's **Actions → Publish Cloudflare PR preview → Run workflow**. Select **main** and run it once. This trigger checks the named project, creates it through the Pages API only if absent, and sets `main` as its production branch. It creates an **empty project** with no production deployment. Repeating this trigger reuses it. The job summary reports Cloudflare's actual assigned hostname; the proposed name/hostname has not been confirmed until this succeeds.
+2. Open **Actions → ToyStage PR checks → Run workflow**. Select **main**, enter **27** for `pr_number`, and run. This resolves PR #27's current head SHA through GitHub, refuses closed/fork PRs or a non-main workflow, then checks out that exact commit. It needs no changes or pushes to #27's branch.
+3. Watch **Test and build PR head** complete. A successful build automatically starts **Publish Cloudflare PR preview**. Check that its validation, publication, and HTTPS verification all succeed. The publisher updates one bot comment on #27 with the **actual returned stable branch alias and versioned deployment URL**; both are also in its summary. Do not infer readiness from a green build alone.
+
+With GitHub CLI, the same post-merge steps are:
+
+```sh
+gh workflow run preview-publish.yml --repo BDubDesigns/ToyStage --ref main
+# Wait for the provisioning run to succeed before starting the build.
+gh workflow run preview-build.yml --repo BDubDesigns/ToyStage --ref main -f pr_number=27
+```
+
+Project creation checks availability in the configured account. Permission/name conflicts fail with an actionable error and do not create an alternative project or change existing configuration. An existing project must be Direct Upload, named `toystage-previews`, have production branch `main`, and have no custom domains. If the preview project is missing, automatic PR runs fail and direct you to the one-time provisioning trigger; they never create duplicate projects. No Cloudflare dashboard access is needed for the normal setup path.
+
+#### Subsequent PRs, security, and links
+
+`preview-build.yml` runs on PR opened/synchronized/reopened events, including forks for checks. It uses Node 24, `npm ci`, `npm test`, and `npm run build`; failure blocks artifact publication. The checkout is the **PR head**, rather than GitHub's synthetic merge commit. Tests/builds use read permissions, no Cloudflare secrets, no persisted git credentials, and no dependency cache shared with publishing.
+
+`preview-publish.yml` is a separate `workflow_run` workflow loaded from `main`. It authenticates the successful run, exact artifact, still-open same-repository PR, and current commit through GitHub APIs. Forks never receive privileged previews. A job without Cloudflare credentials downloads and validates the artifact, replaces `_headers` with trusted Pose MIME rules, and repackages it with a trusted uploader. The separate publisher consumes that artifact without checking out code, executing PR scripts, loading PR config/packages, or restoring PR caches. Its pinned Wrangler install runs in a new empty directory outside the static content. Only project verification/provisioning and the official pinned Wrangler action receive Cloudflare credentials. There is no `pull_request_target` execution path.
+
+Publication uses `--branch pr-<number>`, which keeps each PR isolated. Cloudflare returns a stable alias like `pr-27.<actual-project-hostname>.pages.dev` and a versioned deployment URL. Subsequent pushes update that PR's alias; independent PRs use distinct concurrency groups. Build/publish concurrency cancels superseded work per PR, and the publisher rechecks the PR head before accessing Cloudflare. If GitHub supplies no PR association for an automatic run, publishing fails closed; rerun the checks manually from `main` for that PR.
+
+**Preview URLs are public** and versioned deployments persist after another push or PR closure. Closing a PR prevents new publication but does not delete its existing previews or comment. Raw Actions artifacts expire after 7 days; validated handoff artifacts after 1 day. To recover a failed publication or expired artifact, rerun **ToyStage PR checks** from `main` for the PR's current head. There is no automatic Cloudflare cleanup in this slice. Camera frames remain local to the device; only built app files are uploaded by CI.
+
+The static validator rejects links, executable Pages Functions (`functions/`, `_worker.js`), Wrangler/package config, redirects, hidden files, files over **25 MiB**, more than **20,000 files**, or previews exceeding the pipeline's **100 MiB** budget. Vite still uses `base: "/"`. PR #27's build reconstructs its checksum-verified WASM and includes the local model/worker assets in `dist/`: WASM is 12,997,272 bytes and the model is 5,777,746 bytes, below Pages' per-file limit. Preview-only `_headers` sets `.wasm` to `application/wasm` and `.task` to `application/octet-stream` at their existing `/pose/` paths. The final HTTPS check compares index and WASM/model bytes and MIME on **both returned URLs**, so fallback HTML does not count as a working model. A failed check leaves the deployment unannounced and fails the publisher.
+
+Exact `pr-N.toystage.qcfailed.com` vanity domains and preview cleanup belong to a later issue, after `pages.dev` delivery is proven. This slice adds no custom domains, production routes, DNS records, or nameserver changes.
+
+#### Workflow validation and Pixel acceptance
+
+Local pipeline checks, with Node 24 and [actionlint](https://github.com/rhysd/actionlint) installed:
+
+```sh
+npm ci
+npm test
+npm run build
+node scripts/check-preview-workflows.mjs
+actionlint .github/workflows/preview-build.yml .github/workflows/preview-publish.yml
+git diff --check
+```
+
+The dependency-free workflow checks exercise the actual inline scripts against fake API/filesystem data: malformed manual input, non-main dispatches, forks, stale/closed PRs, mismatched run/artifact identities, executable/config artifacts, links/size limits, provision/reuse/failure, and HTTPS MIME/byte failures. They never use real credentials. Local validation cannot prove Actions artifact transfer, account permissions, project availability, or a live Pages deployment; verify those from a real publisher run after merge.
+
+For **Chrome on Pixel 10 Pro XL**, use the verified #27 preview and:
+
+1. Grant camera permission on the HTTPS origin, select Pose, then raise/bend arms, squat, lean, step, and move knees/legs. Check alignment, responsiveness, and jitter; confirm in remote DevTools that `/pose/` model/WASM requests are same-origin, return real assets with the MIME types above, and no camera frames are transmitted.
+2. Try front/rear cameras, portrait/landscape, device switching, leaving view/occluding a limb, and hiding/returning to the tab. Confirm mirroring and clean reacquisition.
+3. Toggle Pose/Green-screen live and stop/start. Check green-screen key settings, scene changes, six-ball play, and continuous capture with one camera stream.
+4. Run at least 30 seconds each of Pose and Green-screen; record render FPS, inference Hz/ms, perceived lag, and thermal/battery observations. Only physical-device testing establishes Pixel acceptance.
+
+Official references: [CI Direct Upload](https://developers.cloudflare.com/pages/how-to/use-direct-upload-with-continuous-integration/), [project setup](https://developers.cloudflare.com/pages/get-started/direct-upload/), [preview aliases](https://developers.cloudflare.com/pages/configuration/preview-deployments/), [Pages limits](https://developers.cloudflare.com/pages/platform/limits/), and [GitHub workflow_run](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#workflow_run).
+
 ## Manual camera check
 
 On desktop and Android, start the camera, grant permission, confirm that the live preview and diagnostics populate, then stop and start it again. When multiple cameras are available, switch between front and rear cameras and try the device menu, including distinct rear lenses where exposed. Confirm the user-facing preview mirrors, while the scene, key settings, ball-play toggle, and diagnostics remain correct. If practical, deny a selected-device request or disconnect a camera; verify that the previous camera is restored or that a clear **Try again** path appears. Rotate and resize the viewport while the preview is active. Also verify that a denied permission can be recovered after allowing camera access in browser settings, and check the visible messages with no camera available and with another app holding the camera.
