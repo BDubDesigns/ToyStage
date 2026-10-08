@@ -23,6 +23,8 @@ import { drawBall, drawBallAppearance } from "./ball-view";
 import type { CameraRect } from "./compositor-layout";
 import { PoseController } from "./pose/pose-controller";
 import type { PoseStageDiagnostics } from "./pose/pose-controller";
+import type { PoseFrame } from "./pose/pose-types";
+import { PoseBallContacts, drawPoseContacts } from "./pose-ball";
 
 const cameraButton = getElement<HTMLButtonElement>("camera-button");
 const cameraState = getElement<HTMLElement>("camera-state");
@@ -64,6 +66,7 @@ const modeGreen = getElement<HTMLButtonElement>("mode-green");
 const modePose = getElement<HTMLButtonElement>("mode-pose");
 
 const ball = new Ball();
+const poseContacts = new PoseBallContacts();
 const ballEnabled = getElement<HTMLInputElement>("ball-enabled");
 const ballDebug = getElement<HTMLInputElement>("ball-debug");
 const ballOverlay = getElement<HTMLCanvasElement>("ball-overlay");
@@ -95,6 +98,7 @@ for (const profile of BALL_PROFILES) {
   button.append(icon, label, hint);
   button.addEventListener("click", () => {
     ball.setType(profile.id);
+    poseContacts.reset();
     ballHelp.textContent = profile.description;
     for (const choice of ballPicker.querySelectorAll("button")) choice.setAttribute("aria-pressed", String(choice === button));
     setPlacingBall(false);
@@ -108,20 +112,40 @@ function setPlacingBall(value: boolean): void {
   placeBall.setAttribute("aria-pressed", String(value));
   placeBall.textContent = value ? "Cancel placement" : "Place ball";
   canvas.classList.toggle("placing", value);
+  poseCanvas.classList.toggle("placing", value);
+  if (value) invalidatePoseBall();
   updateBallControls();
 }
 
 function updateBallControls(): void {
-  resetBall.disabled = placeBall.disabled = mode !== "green" || !activeStream || !ballEnabled.checked || sampling;
+  resetBall.disabled = placeBall.disabled = !activeStream || !ballEnabled.checked || sampling;
   const message = !activeStream ? "Start the camera to play." : !ballEnabled.checked ? "Ball is off. Turn on Play ball when you're ready."
     : sampling ? "Ball paused while you pick the blanket color."
-    : placingBall ? "Tap inside the live camera area to place the ball. Escape cancels."
+    : placingBall ? "Tap inside the stage's outlined play area to place the ball. Escape cancels."
+    : mode === "pose" ? !ball.debug.fresh ? "Step into view to play. Place the ball near a hand, foot, or your head."
+      : "Punch, kick, or head the ball! Pull away before your next hit. Reset brings it back."
     : !keyEnabled.checked ? "Turn on Remove screen so the ball can sense your toys."
     : !sensingEnabled.checked ? "Turn on Sense foreground in Interaction check to play."
     : !ball.debug.fresh ? "Waiting for fresh camera input…"
     : "Nudge the ball with a toy or hand. Reset brings it back to the middle.";
   const status = `${ball.profile.label} · ${message}`;
   if (ballStatus.textContent !== status) ballStatus.textContent = status;
+}
+
+function invalidatePoseBall(): void {
+  poseContacts.reset(); ball.pause(); ballOverlay.hidden = true;
+}
+
+function updatePoseBall(now: number, frame: PoseFrame | null, width: number, height: number, rect: CameraRect): void {
+  if (mode !== "pose" || !ballEnabled.checked) { invalidatePoseBall(); return; }
+  ball.layout(width, height, rect);
+  if (placingBall) { poseContacts.reset(); ball.pause(); }
+  else poseContacts.tick(now, frame, ball);
+  ballOverlay.hidden = false;
+  drawBall(ballOverlay, ball, width, height, now, ballDebug.checked);
+  if (ballDebug.checked) drawPoseContacts(ballOverlay, poseContacts);
+  updateBallControls();
+  updateBallDiagnostics(now);
 }
 
 function updateBall(now: number, width: number, height: number, rect: CameraRect): void {
@@ -132,26 +156,34 @@ function updateBall(now: number, width: number, height: number, rect: CameraRect
   ballOverlay.hidden = false;
   drawBall(ballOverlay, ball, width, height, now, ballDebug.checked);
   updateBallControls();
+  updateBallDiagnostics(now);
+}
+
+function updateBallDiagnostics(now: number): void {
   if (ballDebug.checked && now - lastBallDiagnostics >= 100) {
     lastBallDiagnostics = now;
     const d = ball.debug;
     const state = ball.profile.bounds === "contained" ? "No gravity" : ball.grounded ? "Grounded" : ball.aboveStage ? "Above stage" : "Airborne";
-    ballDiagnostics.textContent = `${ball.profile.label} · ${state} · velocity (${ball.vx.toFixed(2)}, ${ball.vy.toFixed(2)}) /s · ${d.fresh ? d.contact ? "Contact" : "Clear" : "Paused"} · ${(d.coverage * 100).toFixed(0)}% overlap · ${(d.changed * 100).toFixed(0)}% changed · toy ${d.motion ? Math.hypot(d.motion.x, d.motion.y).toFixed(2) : "—"} /s · hit ${Math.hypot(d.impulse.x, d.impulse.y).toFixed(2)} · ${d.hits} hits`;
+    const contact = mode === "pose" ? poseContacts.lastHit
+      ? `last ${poseContacts.lastHit.part} · speed ${poseContacts.lastHit.speed.toFixed(2)} /s · strength ${poseContacts.lastHit.strength.toFixed(2)}` : "No strike yet"
+      : `${(d.coverage * 100).toFixed(0)}% overlap · ${(d.changed * 100).toFixed(0)}% changed · toy ${d.motion ? Math.hypot(d.motion.x, d.motion.y).toFixed(2) : "—"} /s · hit ${Math.hypot(d.impulse.x, d.impulse.y).toFixed(2)}`;
+    ballDiagnostics.textContent = `${ball.profile.label} · ${state} · velocity (${ball.vx.toFixed(2)}, ${ball.vy.toFixed(2)}) /s · ${d.fresh ? d.contact ? "Contact" : "Clear" : "Paused"} · ${contact} · ${d.hits} hits`;
   }
 }
 
 ballEnabled.addEventListener("change", () => {
   ball.reset();
+  poseContacts.reset();
   ballOverlay.hidden = true;
   setPlacingBall(false);
 });
 ballDebug.addEventListener("change", () => {
   if (!ballDebug.checked) ballDiagnostics.textContent = "Show ball contact & motion to inspect hits.";
 });
-resetBall.addEventListener("click", () => { ball.reset(); setPlacingBall(false); });
+resetBall.addEventListener("click", () => { ball.reset(); poseContacts.reset(); setPlacingBall(false); });
 placeBall.addEventListener("click", () => {
   setPlacingBall(!placingBall);
-  if (placingBall) canvas.scrollIntoView({ block: "center" });
+  if (placingBall) (mode === "pose" ? poseCanvas : canvas).scrollIntoView({ block: "center" });
 });
 
 const sensingEnabled = getElement<HTMLInputElement>("sensing-enabled");
@@ -314,6 +346,14 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && sampling) setSampling(false);
   if (event.key === "Escape" && placingBall) setPlacingBall(false);
 });
+poseCanvas.addEventListener("click", (event) => {
+  if (mode !== "pose" || !placingBall || !activeStream) return;
+  const bounds = poseCanvas.getBoundingClientRect();
+  const x = (event.clientX - bounds.left) / bounds.width, y = (event.clientY - bounds.top) / bounds.height;
+  const b = ball.bounds;
+  if (x < b.x || x > b.x + b.width || y < b.y || y > b.y + b.height) return;
+  ball.reset(x, y); poseContacts.reset(); setPlacingBall(false);
+});
 canvas.addEventListener("click", (event) => {
   if (!sampling && placingBall) {
     const bounds = canvas.getBoundingClientRect();
@@ -466,6 +506,7 @@ function stopActiveStage(): void {
   canvas.hidden = poseCanvas.hidden = posePrompt.hidden = true;
   sensingOverlay.hidden = ballOverlay.hidden = true;
   ball.pause();
+  poseContacts.reset();
   poseRetry.hidden = true;
 }
 
@@ -474,7 +515,9 @@ function startActiveStage(track: MediaStreamTrack): void {
   resetRenderDiagnostics();
   if (mode === "pose") {
     poseCanvas.hidden = false;
-    poseController = new PoseController(poseCanvas, video, shouldMirrorPreview(getCameraFacingMode(track)), updatePoseDiagnostics);
+    ball.reset(); poseContacts.reset();
+    poseController = new PoseController(poseCanvas, video, shouldMirrorPreview(getCameraFacingMode(track)), updatePoseDiagnostics,
+      { onFrame: updatePoseBall, onInvalidate: invalidatePoseBall });
     poseController.start();
     sampleButton.disabled = true;
     return;
@@ -511,6 +554,10 @@ function selectMode(next: "green" | "pose"): void {
   getElement<HTMLElement>("stage-frame").dataset.mode = mode;
   getElement<HTMLElement>("stage-heading").textContent = mode === "pose" ? "Your moving double" : "Live stage";
   getElement<HTMLElement>("mode-help").textContent = mode === "pose" ? "Move your body. Your digital figure follows, with no camera image on screen." : "A green blanket turns your toys into part of the scene.";
+  getElement<HTMLElement>("ball-heading").textContent = mode === "pose" ? "Punch, kick & head!" : "Give it a nudge";
+  getElement<HTMLElement>("ball-play-help").textContent = mode === "pose"
+    ? "Pick a ball and try a gentle tap, then a quicker strike. Place it near your hands, feet, or head. Pull away before hitting again."
+    : "Pick a ball, then nudge it with a toy or hand. Try a gentle tap and a quicker swipe!";
   getElement<HTMLElement>("live-label").textContent = mode === "pose" ? "POSE STAGE" : "LIVE PREVIEW";
   getElement<HTMLElement>("stage-caption").textContent = mode === "pose" ? "One person at a time. Give yourself space, good light, and a full-body view." : "Pick a world, then remove the blanket to put your toys inside it. You can switch worlds while the camera stays live.";
   for (const panel of document.querySelectorAll<HTMLElement>("[data-green-screen]")) panel.hidden = mode === "pose";
@@ -550,7 +597,7 @@ function updatePoseDiagnostics(stats: PoseStageDiagnostics): void {
     ? "Getting your moving double ready… The first load may take a moment."
     : !usable ? "Step back so your body is in view. Good light helps!"
     : usable.state === "partial" ? "I can see part of you. Step back to bring your hands and feet into view."
-    : "You're in view. Try a reach, a lean, or a squat!";
+    : "You're in view. Try a punch, a lifted-foot kick, or a head tap!";
   if (poseStatus.textContent !== message) poseStatus.textContent = message;
   poseStatus.dataset.error = String(failed);
   posePrompt.hidden = Boolean(usable) && !failed || document.hidden;

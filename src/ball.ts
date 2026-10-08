@@ -3,7 +3,7 @@ import type { ForegroundMask } from "./foreground-mask";
 import { getBallProfile } from "./ball-profiles";
 import type { BallProfile, BallType } from "./ball-profiles";
 
-interface Vector { x: number; y: number }
+export interface Vector { x: number; y: number }
 export interface BallDebug {
   fresh: boolean;
   contact: boolean;
@@ -96,13 +96,7 @@ export class Ball {
 
   tick(now: number, mask: ForegroundMask): void {
     if (mask.timestamp === null || now - mask.timestamp > 250 || now < mask.timestamp) { this.pause(); return; }
-    this.debug.fresh = true;
-    const dt = this.frameTime === null ? 0 : clamp((now - this.frameTime) / 1000, 0, 0.05);
-    this.frameTime = now;
-    // Small bounded substeps avoid tunnelling through stage boundaries after
-    // a dropped render frame, including while above the visible stage.
-    const steps = Math.max(1, Math.ceil(dt * 120));
-    for (let i = 0; i < steps; i++) this.integrate(dt / steps);
+    this.advance(now);
     if (mask.timestamp === this.sampleTime) return;
 
     const contact = mask.contact(this.x, this.y, this.radiusX, this.radiusY);
@@ -151,6 +145,32 @@ export class Ball {
     this.debug.impulse = { x: direction.x * strength, y: direction.y * strength };
     this.vx = this.vx * 0.25 + this.debug.impulse.x;
     this.vy = this.vy * 0.25 + this.debug.impulse.y;
+    this.limitSpeed();
+    this.debug.hitTime = now;
+    this.debug.hits++;
+  }
+
+  // Input owners decide freshness/pause policy. The integrator has no mask or
+  // pose dependency; Green-screen tick retains its existing contact semantics.
+  advance(now: number): void {
+    if (!Number.isFinite(now)) return;
+    this.debug.fresh = true;
+    const dt = this.frameTime === null ? 0 : clamp((now - this.frameTime) / 1000, 0, 0.05);
+    this.frameTime = now;
+    const steps = Math.max(1, Math.ceil(dt * 120));
+    for (let i = 0; i < steps; i++) this.integrate(dt / steps);
+  }
+
+  // Explicit velocity delta in shorter-edge units/s. Material response and
+  // both impulse/final-speed caps stay with the ball, never the input tracker.
+  applyImpulse(now: number, impulse: Vector): void {
+    if (![now, impulse.x, impulse.y].every(Number.isFinite)) return;
+    const speed = Math.hypot(impulse.x, impulse.y);
+    if (speed === 0) return;
+    const scale = Math.min(this.profile.hitScale, this.profile.maxSpeed * 2 / speed);
+    this.debug.impulse = { x: impulse.x * scale, y: impulse.y * scale };
+    this.vx += this.debug.impulse.x;
+    this.vy += this.debug.impulse.y;
     this.limitSpeed();
     this.debug.hitTime = now;
     this.debug.hits++;

@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
+import { checkPoseBall } from "./browser-pose-ball-check.mjs";
 
 const port = 5193;
 const origin = `http://127.0.0.1:${port}`;
@@ -56,7 +57,7 @@ function instrument() {
         const x = (source.width - image.width * scale) / 2 + Math.sin(performance.now() / 1500) * source.width * 0.025;
         ctx.drawImage(image, x, (source.height - image.height * scale) / 2, image.width * scale, image.height * scale);
       } else if (probe.scene === "toy") {
-        ctx.fillStyle = "#ff394f"; ctx.fillRect(source.width * 0.4, source.height * 0.4, source.width * 0.12, source.height * 0.12);
+        ctx.fillStyle = "#ff394f"; ctx.fillRect(source.width * (probe.toyX ?? 0.4), source.height * 0.4, source.width * 0.12, source.height * 0.12);
       }
     };
     paint();
@@ -115,10 +116,15 @@ try {
   await measure(page, fixture ? "Pose / moving public test image / SwiftShader" : "Pose / empty synthetic camera / SwiftShader");
 
   // Live mode switches reuse the exact stream and preserve unrelated controls.
-  await page.evaluate(() => { probe.scene = "toy"; window.originalStream = document.querySelector("#stage-video").srcObject; });
+  await page.evaluate(() => { probe.scene = "toy"; probe.toyX = 0.28; window.originalStream = document.querySelector("#stage-video").srcObject; });
   await page.locator("#mode-green").click();
   await page.waitForFunction(() => document.querySelector("#ball-status").textContent.includes("Nudge"));
   assert.equal(await page.locator(".ball-card").count(), 6);
+  await page.locator(".ball-panel details summary").click(); await page.locator("#ball-debug").check();
+  await page.locator("#reset-ball").click(); await page.waitForTimeout(200);
+  await page.evaluate(() => { probe.toyX = 0.46; });
+  await page.waitForFunction(() => /· [1-9][0-9]* hits$/.test(document.querySelector("#ball-diagnostics").textContent));
+  await page.locator("#ball-debug").uncheck();
   for (const type of ["eight-ball", "basketball", "bowling-ball", "super-ball", "dodgeball", "balloon"]) {
     await page.locator(`[data-ball-type="${type}"]`).click();
     assert.equal(await page.locator(`[data-ball-type="${type}"]`).getAttribute("aria-pressed"), "true");
@@ -230,6 +236,7 @@ try {
   assert.deepEqual(errors, []);
   assert(requests.every((request) => request.url.startsWith(origin) && request.method === "GET"));
   console.log(JSON.stringify({ passed: true, ...result, sameOriginGetRequestsOnly: true, fixture: Boolean(fixture), physicalDeviceAcceptance: "pending" }));
+  await checkPoseBall(browser, origin, instrument);
 } finally {
   await browser?.close();
   server.kill();

@@ -1,6 +1,7 @@
 import { BODY_CONNECTIONS, JOINT } from "./pose-types";
 import type { PoseFrame } from "./pose-types";
 import type { CameraRect } from "../compositor-layout";
+import { headRadius } from "./pose-geometry";
 
 export class StickFigureView {
   private readonly ctx: CanvasRenderingContext2D;
@@ -43,8 +44,7 @@ export class StickFigureView {
     const nose = points[JOINT.nose], left = points[JOINT.leftShoulder], right = points[JOINT.rightShoulder];
     if (nose.reliable && left.reliable && right.reliable) {
       const cx = nose.x * w, cy = nose.y * h;
-      const shoulderSpan = Math.hypot((left.x - right.x) * w, (left.y - right.y) * h);
-      const radius = Math.max(short * 0.02, Math.min(short * 0.07, shoulderSpan * 0.23));
+      const radius = headRadius(pose, short / w, short / h) * short;
       const sx = (left.x + right.x) * w / 2, sy = (left.y + right.y) * h / 2;
       const length = Math.hypot(sx - cx, sy - cy) || 1;
       line(cx + (sx - cx) * radius / length, cy + (sy - cy) * radius / length, sx, sy, "#d3f591", nose.raw.visibility ?? 1);
