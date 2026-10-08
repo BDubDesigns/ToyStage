@@ -1,9 +1,12 @@
 import { BODY_CONNECTIONS, JOINT } from "./pose-types";
 import type { PoseFrame } from "./pose-types";
 import type { CameraRect } from "../compositor-layout";
+import { headRadius } from "./pose-geometry";
+import { PoseVisualFilter } from "./pose-visual";
 
 export class StickFigureView {
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly visual = new PoseVisualFilter();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d", { alpha: false });
@@ -11,7 +14,7 @@ export class StickFigureView {
     this.ctx = ctx;
   }
 
-  draw(frame: PoseFrame | null, rect: CameraRect): void {
+  draw(frame: PoseFrame | null, rect: CameraRect, now = performance.now()): void {
     const { ctx, canvas } = this;
     const w = canvas.width, h = canvas.height, short = Math.min(w, h);
     const gradient = ctx.createRadialGradient(w / 2, h * 0.4, 0, w / 2, h / 2, Math.max(w, h));
@@ -24,8 +27,8 @@ export class StickFigureView {
     ctx.strokeStyle = "#c4ee7940";
     ctx.beginPath(); ctx.moveTo(rect.x * w, (rect.y + rect.height) * h); ctx.lineTo((rect.x + rect.width) * w, (rect.y + rect.height) * h); ctx.stroke();
     const pose = frame?.poses.find((value) => value.state !== "unusable");
-    if (!pose) return;
-    const points = pose.landmarks;
+    const points = this.visual.positions(frame, now);
+    if (!pose || !points) return;
     ctx.lineCap = ctx.lineJoin = "round";
     const line = (ax: number, ay: number, bx: number, by: number, color: string, alpha: number) => {
       ctx.globalAlpha = alpha;
@@ -43,8 +46,7 @@ export class StickFigureView {
     const nose = points[JOINT.nose], left = points[JOINT.leftShoulder], right = points[JOINT.rightShoulder];
     if (nose.reliable && left.reliable && right.reliable) {
       const cx = nose.x * w, cy = nose.y * h;
-      const shoulderSpan = Math.hypot((left.x - right.x) * w, (left.y - right.y) * h);
-      const radius = Math.max(short * 0.02, Math.min(short * 0.07, shoulderSpan * 0.23));
+      const radius = headRadius(pose, short / w, short / h) * short;
       const sx = (left.x + right.x) * w / 2, sy = (left.y + right.y) * h / 2;
       const length = Math.hypot(sx - cx, sy - cy) || 1;
       line(cx + (sx - cx) * radius / length, cy + (sy - cy) * radius / length, sx, sy, "#d3f591", nose.raw.visibility ?? 1);

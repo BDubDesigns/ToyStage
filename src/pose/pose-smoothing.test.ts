@@ -37,11 +37,14 @@ describe("pose smoothing and velocity", () => {
     expect(smoother.update(body(0.9, 0.1), 600, layout).state).toBe("unusable");
     expect(smoother.update(body(0.8), 700, layout).landmarks[0].vx).toBe(0);
   });
-  it("does not derive huge velocity from tiny dt or sparse samples", () => {
+  it("rejects tiny dt, derives bounded 5Hz motion, and resets on true gaps", () => {
     const smoother = new PoseSmoother();
     smoother.update(body(), 100, layout);
     expect(smoother.update(body(0.6), 101, layout).landmarks[0].vx).toBe(0);
-    expect(smoother.update(body(0.7), 301, layout).landmarks[0].vx).toBe(0);
+    const lowRate = smoother.update(body(0.7), 301, layout).landmarks[0];
+    expect(lowRate.vx).toBeGreaterThan(0);
+    expect(lowRate.vx).toBeLessThan(1);
+    expect(smoother.update(body(0.8), 602, layout).landmarks[0].vx).toBe(0);
   });
   it("marks truncated results unusable with a stable 33-index array", () => {
     const pose = new PoseSmoother().update([], 0, layout);

@@ -26,7 +26,10 @@ export class PoseSmoother {
         const alpha = 1 - Math.exp(-dtMs / (confidence >= 0.8 ? 45 : 75));
         x = previous.x + (x - previous.x) * alpha;
         y = previous.y + (y - previous.y) * alpha;
-        if (dtMs <= 150) {
+        // Low-end phones may provide a valid pose only every 150–250 ms.
+        // Still calculate real capture-timestamp velocity; discontinuities
+        // above the smoother's distance/age guards remain seeded at zero.
+        if (dtMs <= 260) {
           vx = (x - previous.x) / (dtMs / 1000);
           vy = (y - previous.y) / (dtMs / 1000);
           if (Math.hypot(vx, vy) > 6) vx = vy = 0;

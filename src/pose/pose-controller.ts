@@ -3,6 +3,12 @@ import { PoseTracker } from "./pose-tracker";
 import type { PoseDiagnostics } from "./pose-tracker";
 import { StickFigureView } from "./stick-figure-view";
 import type { PoseFrame } from "./pose-types";
+import type { CameraRect } from "../compositor-layout";
+
+export interface PoseStageCallbacks {
+  onFrame(now: number, frame: PoseFrame | null, width: number, height: number, rect: CameraRect): void;
+  onInvalidate(): void;
+}
 
 export interface PoseStageDiagnostics extends PoseDiagnostics {
   readonly frame: PoseFrame | null;
@@ -39,7 +45,8 @@ export class PoseController {
   private sourceHeight = 0;
 
   constructor(private readonly canvas: HTMLCanvasElement, private readonly video: HTMLVideoElement,
-    private readonly mirrored: boolean, private readonly onDiagnostics: (stats: PoseStageDiagnostics) => void) {
+    private readonly mirrored: boolean, private readonly onDiagnostics: (stats: PoseStageDiagnostics) => void,
+    private readonly callbacks?: PoseStageCallbacks) {
     this.view = new StickFigureView(canvas);
   }
 
@@ -60,6 +67,7 @@ export class PoseController {
     if (size.width !== this.canvas.width || size.height !== this.canvas.height) {
       this.canvas.width = size.width; this.canvas.height = size.height;
       this.tracker.invalidate();
+      this.callbacks?.onInvalidate();
     }
     this.updateLayout();
   };
@@ -68,6 +76,7 @@ export class PoseController {
     if (this.sourceWidth !== this.video.videoWidth || this.sourceHeight !== this.video.videoHeight) {
       this.sourceWidth = this.video.videoWidth; this.sourceHeight = this.video.videoHeight;
       this.tracker.invalidate();
+      this.callbacks?.onInvalidate();
     }
     this.tracker.setLayout({ rect: this.rect(), mirrored: this.mirrored });
   }
@@ -95,7 +104,8 @@ export class PoseController {
     this.updateLayout();
     if (!this.video.requestVideoFrameCallback) this.tracker.sample(this.video, performance.now(), this.video.currentTime);
     const frame = this.tracker.snapshot(now);
-    this.view.draw(frame, this.rect());
+    this.view.draw(frame, this.rect(), now);
+    this.callbacks?.onFrame(now, frame, this.canvas.width, this.canvas.height, this.rect());
     if (this.lastFrame) this.frameTotal += now - this.lastFrame;
     this.lastFrame = now; this.frames++; this.drawTotal += performance.now() - start;
     if (now - this.statsStart >= 1000) {
@@ -122,6 +132,7 @@ export class PoseController {
     if (!this.running) return;
     this.cancelClocks();
     this.tracker.pause();
+    this.callbacks?.onInvalidate();
     this.view.draw(null, this.rect());
     this.fps = this.frameMs = this.drawMs = this.frames = this.frameTotal = this.drawTotal = this.lastFrame = 0;
     this.statsStart = performance.now(); this.lastScheduled = -Infinity;
@@ -139,6 +150,7 @@ export class PoseController {
     this.observer?.disconnect(); this.observer = null;
     document.removeEventListener("visibilitychange", this.visibility);
     this.tracker.stop();
+    this.callbacks?.onInvalidate();
     this.view.draw(null, this.rect());
   }
 }

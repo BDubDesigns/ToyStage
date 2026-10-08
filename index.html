@@ -76,17 +76,17 @@
               <div><p class="eyebrow">MOVE YOUR WAY</p><h2 id="pose-heading">Meet your moving double</h2></div>
               <span class="pose-badge">No green screen</span>
             </div>
-            <p class="key-help">Prop up your phone and step back until it can see your head and feet. Raise an arm, lean, or try a squat. Your camera image stays hidden.</p>
+            <p class="key-help">Prop up your phone and step back until it can see your head and feet. Give yourself room to punch, kick, and head the digital ball. Your camera image stays hidden.</p>
             <p id="pose-status" class="key-help" role="status" aria-live="polite">Start the camera when you have room to move.</p>
             <button id="pose-retry" class="button button-secondary" type="button" hidden>Retry Pose Mode</button>
           </section>
 
-          <section class="ball-panel" data-green-screen aria-labelledby="ball-heading">
+          <section class="ball-panel" aria-labelledby="ball-heading">
             <div class="key-heading-row">
               <div><p class="eyebrow">TOY MEETS WORLD</p><h2 id="ball-heading">Give it a nudge</h2></div>
               <label class="toggle"><input id="ball-enabled" type="checkbox" checked /> Play ball</label>
             </div>
-            <p class="key-help">Pick a ball, then nudge it with a toy or hand. Try a gentle tap and a quicker swipe!</p>
+            <p id="ball-play-help" class="key-help">Pick a ball, then nudge it with a toy or hand. Try a gentle tap and a quicker swipe!</p>
             <div id="ball-picker" class="ball-picker" role="group" aria-label="Ball types"></div>
             <p id="ball-help" class="key-help">No gravity: nudge it to roll and drift. Best with a top-down camera.</p>
             <div class="ball-controls">
@@ -94,6 +94,12 @@
               <button id="place-ball" class="button button-secondary" type="button" disabled aria-pressed="false" aria-describedby="ball-status">Place ball</button>
             </div>
             <p id="ball-status" class="key-help" role="status" aria-live="polite">8 Ball · Start the camera to play.</p>
+            <details class="sensing-panel">
+              <summary>Ball check</summary>
+              <label class="toggle"><input id="ball-debug" type="checkbox" /> Show ball contact &amp; motion</label>
+              <p id="ball-diagnostics" class="key-help">Show ball contact &amp; motion to inspect hits.</p>
+              <p class="key-help">Cyan circles show tracked hands, feet, and head in Pose. A pink arrow and flash show a hit. Speeds use the shorter stage edge per second.</p>
+            </details>
           </section>
 
           <section class="scene-panel" data-green-screen aria-labelledby="scene-heading">
@@ -199,13 +205,11 @@
             <p class="key-help">See the solid areas that toys and hands will use for interaction.</p>
             <label class="toggle"><input id="sensing-enabled" type="checkbox" checked /> Sense foreground</label>
             <label class="toggle"><input id="sensing-debug" type="checkbox" /> Show interaction mask</label>
-            <label class="toggle"><input id="ball-debug" type="checkbox" /> Show ball contact &amp; motion</label>
             <p class="key-help">Cyan marks solid foreground. Tap the stage to check a spot. Color picking pauses sensing.</p>
             <dl class="diagnostic-list">
               <div class="diagnostic-row"><dt>Mask size / rate</dt><dd id="sensing-rate">—</dd></div>
               <div class="diagnostic-row"><dt>Sensing / readback average</dt><dd id="sensing-time">—</dd></div>
               <div class="diagnostic-row"><dt>Solid / changed coverage</dt><dd id="sensing-coverage">—</dd></div>
-              <div class="diagnostic-row"><dt>Ball physics / contact / hits</dt><dd id="ball-diagnostics">Show ball contact &amp; motion to inspect hits.</dd></div>
             </dl>
             <p class="key-help">Ball outline: cyan = clear, pink = contact, gray = paused. Dashed box = motion region; cyan arrow = estimated toy motion; pink arrow = last hit.</p>
             <p id="sensing-probe" class="key-help" role="status">Show the mask, then tap a toy or empty blanket.</p>
