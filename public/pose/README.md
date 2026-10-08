@@ -1,0 +1,10 @@
+# Pinned local Pose assets
+
+- JavaScript package: `@mediapipe/tasks-vision` **1.1.0**, exact version in the lockfile.
+- `wasm/vision_wasm_module_internal.js` and `.wasm`: byte-identical copies from that package's `wasm/` directory. Native ES module loader, SIMD, CPU inference; no local patch or classic-worker shim.
+- `pose_landmarker_lite-float16-v1.task`: Google's **Pose Landmarker Lite / float16 / version 1** detector + 33-landmark bundle. [Versioned source](https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task), 5,777,746 bytes (~5.51 MiB). [Model card](https://storage.googleapis.com/mediapipe-assets/Model%20Card%20BlazePose%20GHUM%203D.pdf), including Apache 2.0 license (page 2), uses and limitations.
+- Library, loader, WASM and model: Apache License 2.0; see `LICENSE`. Copyright The MediaPipe Authors / Google. The app's own source remains under the repository's license.
+
+`assets.json` records sizes and SHA-256 hashes. The WASM source is stored as two ordered binary parts in `vendor/pose/` to fit repository upload limits. `npm run dev` and `npm run build` reconstruct the ignored public WASM file, verify all three assets and compare the WASM files to the installed pinned package. The deployed binary is unchanged. Upgrade the package, these copies and manifest together; never substitute `@latest` assets. Download the versioned model from the source above, not a moving `/latest/` URL.
+
+Only the module loader and SIMD binary used in this slice are deployed. Browsers without WebAssembly SIMD or worker OffscreenCanvas get a visible recoverable error; no main-thread inference fallback. The browser fetches the loader/WASM/model from **this site's own origin**, only when Pose Mode starts with a camera. On first use the total raw asset download is ~19 MB; normal HTTP caching can reuse it later. No camera pixels are included in these requests. Assets have no analytics or upload endpoint. Model inference and all transient frame bitmaps stay in the browser.

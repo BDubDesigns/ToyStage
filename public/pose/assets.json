@@ -1,0 +1,24 @@
+{
+  "package": "@mediapipe/tasks-vision",
+  "packageVersion": "1.1.0",
+  "modelVersion": "Pose Landmarker Lite float16 v1",
+  "modelSource": "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",
+  "files": {
+    "pose_landmarker_lite-float16-v1.task": {
+      "bytes": 5777746,
+      "sha256": "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a"
+    },
+    "wasm/vision_wasm_module_internal.js": {
+      "bytes": 335431,
+      "sha256": "70eff3956521b7de058d7173a4935c95e4a223c26ea624b9f5a936d3a043dcb0"
+    },
+    "wasm/vision_wasm_module_internal.wasm": {
+      "bytes": 12997272,
+      "sha256": "ee03b14a878e6c3c053a1bfa62e166dc45244be54dc0bbe61c578f710b771f6a"
+    }
+  },
+  "wasmSourceParts": [
+    "vendor/pose/vision_wasm_module_internal.wasm.part-1",
+    "vendor/pose/vision_wasm_module_internal.wasm.part-2"
+  ]
+}
