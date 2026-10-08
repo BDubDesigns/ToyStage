@@ -297,3 +297,77 @@ describe("Shared ball physics regressions", () => {
     expect(Math.hypot(ball.debug.impulse.x, ball.debug.impulse.y)).toBeLessThanOrEqual(ball.profile.maxSpeed * 2 + 1e-9);
   });
 });
+
+describe("Measured low-rate pose delivery and ball-time alignment", () => {
+  it.each([5, 8, 10, 12].flatMap(hz => [70, 120].map(delay => ({ hz, delay }))))(
+    "$hz Hz inference with $delay ms latency preserves a real wrist strike",
+    ({ hz, delay }) => {
+      const ball = new Ball(), contacts = new PoseBallContacts(), frame = samples(ball);
+      const period = Math.round(1000 / hz), captureA = 100, captureB = captureA + period;
+      const initial = frame(captureA, hand(0.35));
+      const incoming = frame(captureB, hand(0.46));
+      const deliveredA = captureA + delay, deliveredB = captureB + delay;
+      contacts.tick(deliveredA, initial, ball);
+      // A real 30 fps renderer repeats the most recent result while inference
+      // is busy. It must not destroy contact history at 180 ms sample age.
+      for (let now = deliveredA + 33; now < deliveredB; now += 33) {
+        contacts.tick(now, initial, ball);
+      }
+      contacts.tick(deliveredB, incoming, ball);
+      expect(ball.debug.hits).toBe(1);
+      expect(ball.vx).toBeGreaterThan(0);
+    },
+  );
+
+  it("keeps collision history through a 5 Hz / 120 ms sample and never fabricates a held hit", () => {
+    const ball = new Ball(), contacts = new PoseBallContacts(), frame = samples(ball);
+    const first = frame(100, hand(0.37)), second = frame(300, hand(0.37));
+    contacts.tick(220, first, ball);
+    for (let now = 253; now <= 385; now += 33) contacts.tick(now, first, ball);
+    contacts.tick(420, second, ball);
+    expect(ball.debug.hits).toBe(0);
+    for (let now = 453; now < 615; now += 33) contacts.tick(now, second, ball);
+    contacts.tick(620, frame(500, hand(0.37)), ball);
+    expect(ball.debug.hits).toBe(0);
+  });
+
+  it("calculates delayed swept contact against ball's capture-time location", () => {
+    const ball = new Ball(), contacts = new PoseBallContacts(), frame = samples(ball);
+    ball.vx = 0.45; // Ball moves visibly during the 120 ms inference delay.
+    const initial = frame(100, hand(0.32));
+    const incoming = frame(300, hand(0.465));
+    contacts.tick(220, initial, ball);
+    for (let now = 253; now < 420; now += 33) contacts.tick(now, initial, ball);
+    // At receipt, the displayed ball is already beyond the wrist; at capture,
+    // the wrist's sweep intersected it.
+    expect(ball.x - 0.465).toBeGreaterThan(ball.radius + 0.026);
+    contacts.tick(420, incoming, ball);
+    expect(ball.debug.hits).toBe(1);
+    expect(contacts.lastHit?.part).toBe("left hand");
+  });
+
+  it("retains sample velocities beyond 150 ms but seeds long gaps and teleports", () => {
+    const ball = new Ball(), input = samples(ball), smoother = new PoseSmoother();
+    const raw = (at: number, x: number) => input(at, hand(x)).poses[0].landmarks.map(p => p.raw);
+    smoother.update(raw(100, 0.35), 100, { rect: ball.bounds, mirrored: false });
+    const valid = smoother.update(raw(300, 0.46), 300, { rect: ball.bounds, mirrored: false });
+    expect(valid.landmarks[JOINT.leftWrist].vx).toBeGreaterThan(0.3);
+    const gap = smoother.update(raw(650, 0.5), 650, { rect: ball.bounds, mirrored: false });
+    expect(gap.landmarks[JOINT.leftWrist].vx).toBe(0);
+    const jump = smoother.update(raw(700, 0.95), 700, { rect: ball.bounds, mirrored: false });
+    expect(jump.landmarks[JOINT.leftWrist].vx).toBe(0);
+  });
+
+  it("stale or absent snapshots cannot bridge a lost tracked person into a punch", () => {
+    const ball = new Ball(), contacts = new PoseBallContacts(), frame = samples(ball);
+    const initial = frame(100, hand(0.35));
+    contacts.tick(220, initial, ball);
+    for (let now = 253; now <= 715; now += 33) contacts.tick(now, initial, ball);
+    contacts.tick(820, frame(700, hand(0.46)), ball);
+    expect(ball.debug.hits).toBe(0);
+    const missing = frame(900, hand(0.47));
+    contacts.tick(1020, { ...missing, poses: [] }, ball);
+    contacts.tick(1220, frame(1100, hand(0.51)), ball);
+    expect(ball.debug.hits).toBe(0);
+  });
+});
