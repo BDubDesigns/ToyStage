@@ -2,9 +2,11 @@ import { BODY_CONNECTIONS, JOINT } from "./pose-types";
 import type { PoseFrame } from "./pose-types";
 import type { CameraRect } from "../compositor-layout";
 import { headRadius } from "./pose-geometry";
+import { PoseVisualFilter } from "./pose-visual";
 
 export class StickFigureView {
   private readonly ctx: CanvasRenderingContext2D;
+  private readonly visual = new PoseVisualFilter();
 
   constructor(private readonly canvas: HTMLCanvasElement) {
     const ctx = canvas.getContext("2d", { alpha: false });
@@ -12,7 +14,7 @@ export class StickFigureView {
     this.ctx = ctx;
   }
 
-  draw(frame: PoseFrame | null, rect: CameraRect): void {
+  draw(frame: PoseFrame | null, rect: CameraRect, now = performance.now()): void {
     const { ctx, canvas } = this;
     const w = canvas.width, h = canvas.height, short = Math.min(w, h);
     const gradient = ctx.createRadialGradient(w / 2, h * 0.4, 0, w / 2, h / 2, Math.max(w, h));
@@ -25,8 +27,8 @@ export class StickFigureView {
     ctx.strokeStyle = "#c4ee7940";
     ctx.beginPath(); ctx.moveTo(rect.x * w, (rect.y + rect.height) * h); ctx.lineTo((rect.x + rect.width) * w, (rect.y + rect.height) * h); ctx.stroke();
     const pose = frame?.poses.find((value) => value.state !== "unusable");
-    if (!pose) return;
-    const points = pose.landmarks;
+    const points = this.visual.positions(frame, now);
+    if (!pose || !points) return;
     ctx.lineCap = ctx.lineJoin = "round";
     const line = (ax: number, ay: number, bx: number, by: number, color: string, alpha: number) => {
       ctx.globalAlpha = alpha;
