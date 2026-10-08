@@ -40,16 +40,17 @@ const run = {
 };
 const artifact = { id: 99, name: `preview-dist-pr-27-${sha}`, expired: false, size_in_bytes: 1000 };
 function fixture({ runData = run, prData = pr, artifacts = [artifact], env = {}, event = 'workflow_run', fetch } = {}) {
-  const outputs = {};
-  const summary = { addHeading() { return this; }, addRaw() { return this; }, addLink() { return this; }, async write() {} };
+  const outputs = {}, logs = [], summaryText = [];
+  const summary = { addHeading(value) { summaryText.push(value); return this; },
+    addRaw(value) { summaryText.push(value); return this; }, addLink() { return this; }, async write() {} };
   return {
-    outputs, env,
+    outputs, env, logs, summaryText,
     context: { repo, eventName: event, ref: 'refs/heads/main', payload: { workflow_run: { id: 42 }, pull_request: pr } },
     github: { rest: {
       actions: { getWorkflowRun: async () => ({ data: runData }), listWorkflowRunArtifacts: () => {} },
       pulls: { get: async () => ({ data: prData }) },
     }, paginate: async () => artifacts },
-    core: { setOutput: (key, value) => { outputs[key] = value; }, summary, info() {} }, fetch,
+    core: { setOutput: (key, value) => { outputs[key] = value; }, summary, info: value => logs.push(String(value)) }, fetch,
   };
 }
 async function execute(code, f) {
@@ -188,11 +189,13 @@ test('explicit provisioning creates one empty project without deployments or DNS
     calls.push({ url, options });
     return response(calls.length === 1 ? 404 : 200, project);
   } }));
-  assert.equal(calls.length, 2);
+  assert.equal(calls.length, 3);
   assert.match(calls[0].url, /\/pages\/projects\/toystage-previews$/);
   assert.match(calls[1].url, /\/pages\/projects$/);
   assert.equal(calls[1].options.method, 'POST');
   assert.deepEqual(JSON.parse(calls[1].options.body), { name: 'toystage-previews', production_branch: 'main' });
+  assert.equal(calls[2].url, calls[0].url);
+  assert.equal(calls[2].options.method, undefined); // Canonical GET after creation.
 });
 test('reuse does not create a duplicate; automatic publication never provisions', async () => {
   let calls = 0;
@@ -204,7 +207,138 @@ test('Cloudflare permission errors and conflicting project configuration fail cl
   await assert.rejects(execute(provision, fixture({ env: credentials, fetch: async () => response(403) })), /HTTP 403/);
   for (const altered of [{ ...project, production_branch: 'pr-27' }, { ...project, name: 'production' },
     { ...project, source: { type: 'github' } }, { ...project, domains: ['toystage.qcfailed.com'] }]) {
-    await assert.rejects(execute(provision, fixture({ env: credentials, fetch: async () => response(200, altered) })), /Refusing project/);
+    await assert.rejects(execute(provision, fixture({ env: credentials, fetch: async () => response(200, altered) })), /Refusing existing project/);
+  }
+});
+
+// Cloudflare's official Wrangler fixtures return source:null/omitted and include
+// the project's default pages.dev hostname in domains. Do not mistake it for a
+// custom domain; do not extend this exception to unrelated *.pages.dev hosts.
+// https://github.com/cloudflare/workers-sdk/blob/main/packages/wrangler/src/__tests__/pages/project-list.test.ts
+// https://github.com/cloudflare/workers-sdk/blob/main/packages/wrangler/src/__tests__/pages/deploy.test.ts
+for (const source of [undefined, null]) {
+  test(`Direct Upload reuses its own default domain with ${source === null ? 'null' : 'omitted'} source`, async () => {
+    let calls = 0;
+    const f = fixture({ event: 'workflow_dispatch', env: credentials, fetch: async (_url, options) => {
+      calls++;
+      assert.equal(options.method, undefined);
+      return response(200, { ...project, source, domains: [project.subdomain] });
+    } });
+    await execute(provision, f);
+    assert.equal(calls, 1);
+    const diagnostic = JSON.parse(f.logs.find(line => line.startsWith('Cloudflare project validation: ')).split(': ').slice(1).join(': '));
+    assert.equal(diagnostic.no_custom_domains, true);
+    assert.equal(diagnostic.domain_count, 1);
+    assert.equal(diagnostic.custom_domain_count, 0);
+    assert.equal(diagnostic.created_during_run, false);
+    assert.match(f.summaryText.join('\n'), /Reused Direct Upload project/);
+  });
+}
+
+test('successful creation validates a refetched project, not a partial POST response', async () => {
+  const calls = [];
+  const f = fixture({ event: 'workflow_dispatch', env: credentials, fetch: async (url, options) => {
+    calls.push({ url, options });
+    if (calls.length === 1) return response(404);
+    if (calls.length === 2) return response(200, { name: project.name });
+    return response(200, { ...project, source: null, domains: [project.subdomain] });
+  } });
+  await execute(provision, f);
+  assert.equal(calls.length, 3);
+  assert.match(f.logs.join('\n'), /created_during_run=true/);
+  assert.match(f.summaryText.join('\n'), /Created Direct Upload project/);
+});
+
+test('successful creation followed by failed refetch stops without another creation', async () => {
+  for (const status of [404, 403, 500]) {
+    const calls = [];
+    const f = fixture({ event: 'workflow_dispatch', env: credentials, fetch: async (_url, options) => {
+      calls.push(options.method ?? 'GET');
+      return calls.length === 2 ? response(200, { name: project.name }) : response(calls.length === 1 ? 404 : status);
+    } });
+    await assert.rejects(execute(provision, f), /creation succeeded but refetch failed/);
+    assert.deepEqual(calls, ['GET', 'POST', 'GET']);
+    assert.equal(f.summaryText.length, 0);
+  }
+});
+
+test('failed creation does not refetch or retry POST', async () => {
+  const calls = [];
+  await assert.rejects(execute(provision, fixture({ event: 'workflow_dispatch', env: credentials,
+    fetch: async (_url, options) => {
+      calls.push(options.method ?? 'GET');
+      return response(calls.length === 1 ? 404 : 409);
+    } })), /Project creation failed \(HTTP 409\)/);
+  assert.deepEqual(calls, ['GET', 'POST']);
+});
+
+for (const [label, changed, check] of [
+  ['wrong name', { ...project, name: 'other' }, 'name_matches'],
+  ['wrong branch', { ...project, production_branch: 'pr-27' }, 'production_branch_matches'],
+  ['GitHub source', { ...project, source: { type: 'github' } }, 'source_absent'],
+  ['GitLab source', { ...project, source: { type: 'gitlab' } }, 'source_absent'],
+  ['empty source object', { ...project, source: {} }, 'source_absent'],
+  ['unknown source', { ...project, source: { type: 'direct_upload' } }, 'source_absent'],
+  ['malformed source', { ...project, source: false }, 'source_absent'],
+  ['production domain', { ...project, domains: [project.subdomain, 'toystage.qcfailed.com'] }, 'no_custom_domains'],
+  ['other Pages domain', { ...project, domains: ['unrelated.pages.dev'] }, 'no_custom_domains'],
+  ['malformed domains', { ...project, domains: 'not-an-array' }, 'domains_shape_valid'],
+  ['object domain', { ...project, domains: [{ name: project.subdomain }] }, 'domains_shape_valid'],
+  ['invalid hostname', { ...project, subdomain: 'https://wrong.example' }, 'hostname_valid'],
+  ['missing project', null, 'project_shape_valid'],
+]) {
+  test(`safe diagnostics identify ${label}; conflicting reuse is read-only`, async () => {
+    const calls = [];
+    const f = fixture({ event: 'workflow_dispatch', env: credentials, fetch: async (_url, options) => {
+      calls.push(options.method ?? 'GET');
+      return response(200, changed);
+    } });
+    await assert.rejects(execute(provision, f), error => error.message.includes(`failed checks:`) && error.message.includes(check));
+    assert.deepEqual(calls, ['GET']);
+    assert.match(f.logs.join('\n'), new RegExp(`"${check}":false`));
+    assert.equal(f.summaryText.length, 0);
+  });
+}
+
+test('created project conflicting canonical response is rejected with creation provenance', async () => {
+  let calls = 0;
+  const f = fixture({ event: 'workflow_dispatch', env: credentials, fetch: async () => {
+    calls++;
+    return response(calls === 1 ? 404 : 200, calls === 3 ? { ...project, source: { type: 'github' } } : project);
+  } });
+  await assert.rejects(execute(provision, f), /Refusing newly created project: failed checks: source_absent/);
+  assert.equal(calls, 3);
+  assert.match(f.logs.join('\n'), /"created_during_run":true/);
+});
+
+test('project diagnostics never print credentials, account, headers, or response fields', async () => {
+  const f = fixture({ event: 'workflow_dispatch', env: credentials, fetch: async () => response(200, {
+    ...project, name: credentials.CLOUDFLARE_API_TOKEN, production_branch: credentials.CLOUDFLARE_ACCOUNT_ID,
+    source: { type: 'private-source-value', config: { Authorization: 'private-header-value' } },
+    domains: ['private-domain-value'], private_extra_field: 'private-response-value',
+  }) });
+  let error;
+  try { await execute(provision, f); } catch (caught) { error = caught; }
+  assert.ok(error);
+  const output = [...f.logs, ...f.summaryText, error.message].join('\n');
+  for (const forbidden of [...Object.values(credentials), 'Authorization', 'private-source-value',
+    'private-header-value', 'private-domain-value', 'private-response-value', 'private_extra_field']) {
+    assert.ok(!output.includes(forbidden), 'Unsafe value appeared in diagnostics');
+  }
+  const diagnostic = JSON.parse(f.logs.find(line => line.startsWith('Cloudflare project validation: ')).slice('Cloudflare project validation: '.length));
+  assert.ok(Object.values(diagnostic).every(value => value === null || typeof value === 'boolean' || typeof value === 'number'));
+});
+
+test('network/JSON errors are redacted instead of printing API request or response details', async () => {
+  for (const fetch of [async () => { throw new Error('private-request-value'); },
+    async () => ({ status: 502, ok: false, json: async () => { throw new Error('private-response-value'); } })]) {
+    const f = fixture({ env: credentials, fetch });
+    let error;
+    try { await execute(provision, f); } catch (caught) { error = caught; }
+    assert.ok(error);
+    const output = [...f.logs, error.message].join('\n');
+    assert.doesNotMatch(output, /private-(request|response)-value/);
+    assert.match(output, /withheld/);
   }
 });
 
