@@ -21,6 +21,8 @@ import { Ball } from "./ball";
 import { BALL_PROFILES } from "./ball-profiles";
 import { drawBall, drawBallAppearance } from "./ball-view";
 import type { CameraRect } from "./compositor-layout";
+import { PoseController } from "./pose/pose-controller";
+import type { PoseStageDiagnostics } from "./pose/pose-controller";
 
 const cameraButton = getElement<HTMLButtonElement>("camera-button");
 const cameraState = getElement<HTMLElement>("camera-state");
@@ -52,6 +54,14 @@ let cameraChoices: CameraDeviceChoice[] = [];
 let selectedCameraDeviceId: string | undefined;
 let cameraSwitchInProgress = false;
 let deviceChangeListener: (() => void) | null = null;
+let mode: "green" | "pose" = "green";
+let poseController: PoseController | null = null;
+const poseCanvas = getElement<HTMLCanvasElement>("pose-canvas");
+const posePrompt = getElement<HTMLElement>("pose-prompt");
+const poseStatus = getElement<HTMLElement>("pose-status");
+const poseRetry = getElement<HTMLButtonElement>("pose-retry");
+const modeGreen = getElement<HTMLButtonElement>("mode-green");
+const modePose = getElement<HTMLButtonElement>("mode-pose");
 
 const ball = new Ball();
 const ballEnabled = getElement<HTMLInputElement>("ball-enabled");
@@ -102,7 +112,7 @@ function setPlacingBall(value: boolean): void {
 }
 
 function updateBallControls(): void {
-  resetBall.disabled = placeBall.disabled = !activeStream || !ballEnabled.checked || sampling;
+  resetBall.disabled = placeBall.disabled = mode !== "green" || !activeStream || !ballEnabled.checked || sampling;
   const message = !activeStream ? "Start the camera to play." : !ballEnabled.checked ? "Ball is off. Turn on Play ball when you're ready."
     : sampling ? "Ball paused while you pick the blanket color."
     : placingBall ? "Tap inside the live camera area to place the ball. Escape cancels."
@@ -390,7 +400,7 @@ async function startCamera(): Promise<void> {
   let stream: MediaStream | null = null;
   let renderingError = false;
   try {
-    if (!webglAvailable) {
+    if (mode === "green" && !webglAvailable) {
       throw new Error("WebGL 2 is unavailable. Try a recent browser with hardware acceleration enabled.");
     }
     stream = await requestCamera(navigator.mediaDevices);
@@ -404,7 +414,7 @@ async function startCamera(): Promise<void> {
     if (stream && activeStream !== stream) stream.getTracks().forEach((track) => track.stop());
     if (attempt.signal.aborted) return;
     releaseStream();
-    showFailure(error, false, renderingError || !webglAvailable);
+    showFailure(error, false, renderingError || (mode === "green" && !webglAvailable));
   }
 }
 
@@ -430,26 +440,9 @@ async function attachCameraStream(stream: MediaStream, attempt: AbortController,
   await waitForMetadata(video, attempt.signal);
   await video.play();
   if (attempt.signal.aborted) return;
+  if (track.readyState !== "live") throw new DOMException("Camera track ended while starting", "NotReadableError");
 
-  renderer = new WebGLCompositor(canvas, video, {
-    mirrored: shouldMirrorPreview(getCameraFacingMode(track)),
-    onDiagnostics: updateRenderDiagnostics,
-    onMask: updateMask,
-    onFrame: updateBall,
-    onError: (error) => {
-      releaseStream();
-      showFailure(error, false, true);
-    },
-  });
-  if (selectedScene.kind === "animated" || selectedImage) renderer.setScene(selectedScene, selectedImage);
-  renderer.setSceneMotion(sceneMotion.checked);
-  renderer.setSensingEnabled(sensingEnabled.checked);
-  ball.reset();
-  renderer.start();
-  applyKeySettings();
-  sampleButton.disabled = false;
-  setSampling(false);
-  canvas.hidden = false;
+  startActiveStage(track);
   emptyState.hidden = true;
   liveOverlay.hidden = false;
   updateDiagnostics(track);
@@ -465,6 +458,118 @@ async function attachCameraStream(stream: MediaStream, attempt: AbortController,
   track.addEventListener("ended", onEnded, { once: true });
   removeTrackListener = () => track.removeEventListener("ended", onEnded);
   await refreshCameraChoices();
+}
+
+function stopActiveStage(): void {
+  renderer?.dispose(); renderer = null;
+  poseController?.dispose(); poseController = null;
+  canvas.hidden = poseCanvas.hidden = posePrompt.hidden = true;
+  sensingOverlay.hidden = ballOverlay.hidden = true;
+  ball.pause();
+  poseRetry.hidden = true;
+}
+
+function startActiveStage(track: MediaStreamTrack): void {
+  stopActiveStage();
+  resetRenderDiagnostics();
+  if (mode === "pose") {
+    poseCanvas.hidden = false;
+    poseController = new PoseController(poseCanvas, video, shouldMirrorPreview(getCameraFacingMode(track)), updatePoseDiagnostics);
+    poseController.start();
+    sampleButton.disabled = true;
+    return;
+  }
+  const stageRenderer = new WebGLCompositor(canvas, video, {
+    mirrored: shouldMirrorPreview(getCameraFacingMode(track)),
+    onDiagnostics: updateRenderDiagnostics,
+    onMask: updateMask,
+    onFrame: updateBall,
+    onError: (error) => {
+      if (renderer !== stageRenderer || mode !== "green") return;
+      releaseStream();
+      showFailure(error, false, true);
+    },
+  });
+  renderer = stageRenderer;
+  if (selectedScene.kind === "animated" || selectedImage) renderer.setScene(selectedScene, selectedImage);
+  renderer.setSceneMotion(sceneMotion.checked);
+  renderer.setSensingEnabled(sensingEnabled.checked);
+  ball.reset();
+  renderer.start();
+  applyKeySettings();
+  sampleButton.disabled = false;
+  setSampling(false);
+  canvas.hidden = false;
+}
+
+function selectMode(next: "green" | "pose"): void {
+  if (mode === next) return;
+  setSampling(false); setPlacingBall(false);
+  mode = next;
+  modeGreen.setAttribute("aria-pressed", String(mode === "green"));
+  modePose.setAttribute("aria-pressed", String(mode === "pose"));
+  getElement<HTMLElement>("stage-frame").dataset.mode = mode;
+  getElement<HTMLElement>("stage-heading").textContent = mode === "pose" ? "Your moving double" : "Live stage";
+  getElement<HTMLElement>("mode-help").textContent = mode === "pose" ? "Move your body. Your digital figure follows, with no camera image on screen." : "A green blanket turns your toys into part of the scene.";
+  getElement<HTMLElement>("live-label").textContent = mode === "pose" ? "POSE STAGE" : "LIVE PREVIEW";
+  getElement<HTMLElement>("stage-caption").textContent = mode === "pose" ? "One person at a time. Give yourself space, good light, and a full-body view." : "Pick a world, then remove the blanket to put your toys inside it. You can switch worlds while the camera stays live.";
+  for (const panel of document.querySelectorAll<HTMLElement>("[data-green-screen]")) panel.hidden = mode === "pose";
+  getElement<HTMLElement>("pose-panel").hidden = getElement<HTMLElement>("pose-diagnostics").hidden = mode !== "pose";
+  updateBallControls();
+  const track = activeStream?.getVideoTracks()[0];
+  if (track && cameraState.dataset.state === "live") {
+    try { startActiveStage(track); }
+    catch (error) { releaseStream(); showFailure(error, false, true); }
+  } else if (!session) {
+    stopActiveStage();
+    emptyTitle.textContent = "Your stage is ready";
+    stageMessage.textContent = mode === "pose" ? "Start the camera, then step back so it sees your whole body." : "Start the camera to bring your play space into ToyStage.";
+    stageMessage.removeAttribute("data-error");
+    setState("off", "Camera off");
+    cameraButton.textContent = "Start camera";
+  }
+}
+
+modeGreen.addEventListener("click", () => selectMode("green"));
+modePose.addEventListener("click", () => selectMode("pose"));
+poseRetry.addEventListener("click", () => {
+  const track = activeStream?.getVideoTracks()[0];
+  if (mode === "pose" && track) {
+    try { startActiveStage(track); }
+    catch (error) { releaseStream(); showFailure(error, false, true); }
+  }
+});
+
+function updatePoseDiagnostics(stats: PoseStageDiagnostics): void {
+  if (mode !== "pose") return;
+  const frame = stats.frame;
+  const usable = frame?.poses.find((pose) => pose.state !== "unusable");
+  const failed = stats.state === "error" || stats.state === "unsupported";
+  const message = document.hidden ? "Pose paused while this tab is hidden." : failed
+    ? `Pose Mode needs attention. ${stats.error}` : stats.state === "loading"
+    ? "Getting your moving double ready… The first load may take a moment."
+    : !usable ? "Step back so your body is in view. Good light helps!"
+    : usable.state === "partial" ? "I can see part of you. Step back to bring your hands and feet into view."
+    : "You're in view. Try a reach, a lean, or a squat!";
+  if (poseStatus.textContent !== message) poseStatus.textContent = message;
+  poseStatus.dataset.error = String(failed);
+  posePrompt.hidden = Boolean(usable) && !failed || document.hidden;
+  if (!posePrompt.hidden && posePrompt.textContent !== message) posePrompt.textContent = message;
+  poseRetry.hidden = !failed;
+  getElement<HTMLElement>("pose-worker-state").textContent = `${document.hidden ? "Paused" : stats.state} · Lite v1 / CPU worker`;
+  getElement<HTMLElement>("pose-count").textContent = `${usable ? 1 : 0} / 1 · ${usable?.state ?? "looking for you"}`;
+  getElement<HTMLElement>("pose-sample-rate").textContent = `${stats.sampleWidth} × ${stats.sampleHeight} / ${stats.samplesHz.toFixed(1)} Hz (18 target)`;
+  getElement<HTMLElement>("pose-inference-time").textContent = `${stats.inferenceMs.toFixed(1)} ms`;
+  getElement<HTMLElement>("pose-capture-time").textContent = `${stats.captureMs.toFixed(1)} / ${stats.roundTripMs.toFixed(1)} ms`;
+  getElement<HTMLElement>("pose-age").textContent = frame ? `${Math.max(0, performance.now() - frame.capturedAt).toFixed(0)} ms · fresh` : "No fresh pose";
+  getElement<HTMLElement>("pose-backpressure").textContent = `${stats.busy ? "One frame in flight" : "Ready for next frame"} · ${stats.skipped} skipped`;
+  renderRate.textContent = document.hidden ? "Paused while hidden" : `${stats.fps.toFixed(1)} fps / 30 target · Pose`;
+  frameTime.textContent = `${stats.frameMs.toFixed(1)} ms`;
+  submissionTime.textContent = `${stats.drawMs.toFixed(2)} ms · Canvas draw`;
+  renderSize.textContent = `${stats.width} × ${stats.height}`;
+  videoSize.textContent = `${stats.videoWidth} × ${stats.videoHeight}`;
+  cameraView.textContent = stats.mirrored ? "Mirrored · fit whole frame" : "Unmirrored · fit whole frame";
+  sensingRate.textContent = "Off in Pose Mode";
 }
 
 async function switchCamera(deviceId: string): Promise<void> {
@@ -485,20 +590,24 @@ async function switchCamera(deviceId: string): Promise<void> {
     targetStream = await requestCamera(navigator.mediaDevices, deviceId);
     if (attempt.signal.aborted) { targetStream.getTracks().forEach((track) => track.stop()); return; }
     await attachCameraStream(targetStream, attempt, deviceId);
-    cameraSwitchStatus.textContent = "Camera changed. Check the screen color; this camera may need its own calibration.";
+    if (attempt.signal.aborted) return;
+    cameraSwitchStatus.textContent = mode === "pose" ? "Camera changed. Step into view again." : "Camera changed. Check the screen color; this camera may need its own calibration.";
   } catch (error) {
     if (targetStream && activeStream !== targetStream) targetStream.getTracks().forEach((track) => track.stop());
     if (attempt.signal.aborted) return;
     releaseStream();
+    let recoveryAttempt: AbortController | null = null;
     try {
-      const recoveryAttempt = beginCameraRequest("Restoring camera", "Restoring previous camera", "The selected camera could not start. Reconnecting to the previous camera.");
+      recoveryAttempt = beginCameraRequest("Restoring camera", "Restoring previous camera", "The selected camera could not start. Reconnecting to the previous camera.");
       const recovered = await requestCamera(navigator.mediaDevices, oldDeviceId);
       if (recoveryAttempt.signal.aborted) { recovered.getTracks().forEach((track) => track.stop()); return; }
       await attachCameraStream(recovered, recoveryAttempt, oldDeviceId);
+      if (recoveryAttempt.signal.aborted) return;
       const failedLabel = cameraChoices.find((camera) => camera.deviceId === deviceId)?.label ?? "selected camera";
       cameraSwitchStatus.dataset.error = "true";
       cameraSwitchStatus.textContent = `Could not switch to ${failedLabel}. Your previous camera is back. ${getCameraErrorMessage(error)}`;
     } catch {
+      if (recoveryAttempt?.signal.aborted) return;
       releaseStream();
       showFailure(error);
       stageMessage.textContent = `Camera switch failed and the previous camera could not be restored. ${getCameraErrorMessage(error)} Use Try again to restart.`;
@@ -511,8 +620,11 @@ async function switchCamera(deviceId: string): Promise<void> {
 
 async function refreshCameraChoices(): Promise<void> {
   if (!navigator.mediaDevices?.enumerateDevices) return;
+  const currentSession = session;
+  const currentStream = activeStream;
   try {
     const choices = getCameraChoices(await navigator.mediaDevices.enumerateDevices());
+    if (session !== currentSession || activeStream !== currentStream) return;
     cameraChoices = choices;
     const currentId = getActiveCameraDeviceId();
     if (currentId) selectedCameraDeviceId = currentId;
@@ -530,9 +642,10 @@ async function refreshCameraChoices(): Promise<void> {
       cameraSelect.prepend(current);
     }
     if (currentId) cameraSelect.value = currentId;
-    cameraSwitcher.hidden = choices.length < 2;
-    switchCameraButton.disabled = cameraSelect.disabled = choices.length < 2 || cameraSwitchInProgress;
+    cameraSwitcher.hidden = choices.length < 2 || !activeStream;
+    switchCameraButton.disabled = cameraSelect.disabled = choices.length < 2 || cameraSwitchInProgress || !activeStream;
   } catch {
+    if (session !== currentSession || activeStream !== currentStream) return;
     // Some browsers do not allow enumeration until permission is granted; the
     // live stream remains usable and a later devicechange can refresh the list.
     cameraChoices = [];
@@ -569,8 +682,7 @@ function releaseStream(): void {
   session = null;
   removeTrackListener?.();
   removeTrackListener = null;
-  renderer?.dispose();
-  renderer = null;
+  stopActiveStage();
   const stream = activeStream;
   activeStream = null;
   selectedCameraDeviceId = undefined;
@@ -587,6 +699,9 @@ function releaseStream(): void {
   resetRenderDiagnostics();
   cameraSwitcher.hidden = true;
   cameraSwitchStatus.textContent = "";
+  poseStatus.textContent = "Start the camera when you have room to move.";
+  getElement<HTMLElement>("pose-worker-state").textContent = "Off · Lite / CPU";
+  for (const id of ["pose-count", "pose-sample-rate", "pose-inference-time", "pose-capture-time", "pose-age", "pose-backpressure"]) getElement<HTMLElement>(id).textContent = "—";
 }
 
 function showFailure(error: unknown, insecureContext = false, renderingError = false): void {

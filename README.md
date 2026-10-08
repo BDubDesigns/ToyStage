@@ -1,12 +1,12 @@
 # ToyStage
 
-ToyStage is a browser-based play stage for bringing physical toys into digital scenes. The live camera is rendered through WebGL 2 over a chosen built-in scene. Camera frames stay in the browser: the app does not upload, save, or record them.
+ToyStage is a browser-based play stage with two modes: **Green-screen** brings physical toys into digital scenes; **Pose** turns one person's movements into a digital stick figure without displaying their camera image. Camera frames stay in the browser: the app does not upload, save, or record them.
 
 ## Requirements
 
 - Node.js 20.19+ or 22.12+
 - npm
-- A modern browser with camera access and WebGL 2
+- A modern browser with camera access. Green-screen needs WebGL 2; Pose needs module workers, ImageBitmap, worker OffscreenCanvas and WebAssembly SIMD.
 
 ## Run locally
 
@@ -32,6 +32,62 @@ The rear camera is preferred where the browser supports facing-mode selection. U
 After camera permission is granted, **Switch camera** cycles through available cameras and the **Camera** menu can select a particular device or lens. Browser-provided names are shown when available; otherwise devices use a simple session order. Switching releases the current stream before requesting its replacement, then rebuilds the renderer so mirroring, sizing, sensing, and diagnostics match the new camera. Scene, animation, ball-play, and chroma-key choices remain in page memory. Camera exposure and color can differ, so check the key and pick the blanket color again if needed; switching never changes that color automatically. If the new camera cannot start, ToyStage tries to reconnect to the previous camera and reports the failure.
 
 The compositor targets 30 rendered frames per second, with a drawing buffer bounded to 1280×720 or 720×1280 depending on stage shape. It uploads from the hidden video directly into a GPU texture, without full-frame CPU readback. Rendering pauses in hidden tabs. Stop, camera failure, graphics-context loss, and page navigation release the stream and renderer resources; graphics-context loss displays a retry message.
+
+## Pose Mode
+
+Select **Pose**, then **Start camera**, or switch while the camera is live. Mode switching reuses the existing stream without another permission request. A mode switch resets interaction history; selected world, animation, key settings, sensing preferences and ball type stay in page memory. Green-screen controls are hidden and inactive during Pose Mode. The initial mode remains Green-screen.
+
+Prop the phone securely at a height/angle that sees your head through your feet, leave space around your hands, and use even light. Start with one person facing the camera. Raise each arm, bend an elbow, crouch, lean and lift a knee. The figure follows measured body proportions, with cyan/coral limbs and a light torso/head. Missing or low-visibility segments disappear instead of pretending to be tracked. No usable body shows a friendly step-back message. This slice has no gestures, ball strikes, grabs, scoring, face mesh or identity matching.
+
+Pose uses the **same hidden decoded video** owned by the existing camera controller. The stage shows only a minimal background and Canvas stick figure. It uses the same `getCameraRect` aspect-containment mapping and drawing-buffer budget as Green-screen. Front cameras mirror x once; anatomical left/right indices remain unchanged. Browser-decoded dimensions supply orientation. Portrait mobile Pose stages are taller to make full-body framing practical. Mode choice and settings reset on reload.
+
+### Local model, browser support and cost
+
+Inference uses pinned **`@mediapipe/tasks-vision` 1.1.0**, its matching native module WASM loader/binary and **Pose Landmarker Lite float16 v1**. All runtime assets are deployed under `public/pose/` on this site's origin; there are no CDN/model-server frame requests. Assets total **19,110,449 bytes (~18.23 MiB raw)**, including the 5,777,746-byte (~5.51 MiB) model bundle. Only starting Pose with a camera loads them; first use can take a moment, and normal HTTP caching can reuse the downloads. Model and runtime are Apache 2.0. Sources, license and SHA-256 hashes are documented in [public/pose/README.md](public/pose/README.md) / `assets.json`; builds verify checksums and agreement with the installed package.
+
+`detectForVideo` is synchronous **inside a module worker**, with CPU delegate, one pose, and segmentation disabled. At most one frame is being captured or inferred. New decoded frames are offered through `requestVideoFrameCallback`, capped at 18 samples/s; fallback sampling checks changing `video.currentTime` in the single 30 fps Pose render loop. Busy/throttled frames are skipped rather than queued. `createImageBitmap` downsizes proportionally to a 512-pixel long edge without a JavaScript pixel loop. The worker closes transferred bitmaps in `finally`; late captures close locally after cancellation. No sampled frames, poses or camera settings are uploaded, recorded or persisted.
+
+Modern Chrome/Edge is the initial baseline. Chromium 153 with software graphics was checked against the actual worker/model. Other browsers and the Pixel still need device verification. CPU inference still uses the upstream runtime's worker OffscreenCanvas/WebGL image preprocessing, so disabling GPU/browser features may prevent initialization. Pose camera acquisition is independent of the main stage's WebGL2 availability. Unsupported worker/WASM/model initialization shows **Retry Pose Mode** and keeps the camera available for Green-screen; there is no synchronous UI-thread fallback. A hidden tab stops sampling/rendering and clears pose history; its one current model worker stays loaded until stop or mode/device change. Stop, camera end/switch, mode switch, failure and pagehide terminate old workers and invalidate late work. Resize/decoded-dimension changes invalidate mapping/history while preserving the worker.
+
+Lighting, occlusion, motion blur, side/back views and leaving the frame can reduce quality. Model confidence is an estimate, not proof of correct joints. Lite favors responsiveness over accuracy. If processing falls behind the 300 ms freshness threshold, the figure disappears until fresh input arrives. The 18 Hz sampling target is a cap, not a performance promise; inspect actual numbers on your device.
+
+### Pose snapshot contract
+
+`PoseTracker.snapshot(performance.now())` returns a deeply frozen `PoseFrame`, or `null` after **300 ms measured from capture start**. Empty inference returns `poses: []`; unreliable joints remain in the stable 33-index array with a reason and zero velocity. Consumers must check snapshot freshness before using any previously retained frame.
+
+| Field | Semantics |
+| --- | --- |
+| `capturedAt` | Main `performance.now()` when bitmap capture starts on a new decoded frame. Sampling time, not sensor exposure time. |
+| `mediaTime` | Original video's media timestamp in seconds; deduplication only, not a velocity clock. |
+| `completedAt` | Worker inference-completion timestamp converted by worker `timeOrigin + now − main timeOrigin`. Same milliseconds clock as capture/receive. |
+| `receivedAt` | Main `performance.now()` when the result arrives. |
+| `inferenceMs`, `captureMs`, `roundTripMs` | Actual worker inference; async capture/downscale; send→receive wall time including inference, scheduling and transport. |
+| `pose.state` | Derived `tracked` when all 12 primary body joints are reliable; `partial` with at least 2 torso anchors and 4 primary body joints; otherwise `unusable`. No fabricated model-level confidence. |
+| `landmark.x/y` | Smoothed stage-normalized position: top-left `(0,0)`, y downward, mapping/mirror already applied; may fall outside `[0,1]`. |
+| `landmark.raw` | Unmirrored image-space model x/y, optional model-relative z, visibility and presence where supplied; no world landmarks required. |
+| `reliable`, `reliability` | Finite x/y, supplied finite visibility ≥0.5, and presence ≥0.5 when supplied. Reasons: invalid, missing-confidence, low-visibility, low-presence, reliable. |
+| `vx/vy` | Recent **stage widths/heights per second** from capture timestamps. These differ from ball shorter-edge units; conversion is `vx * stageWidth / min(width,height)` and similarly for y. |
+
+`JOINT` names all 33 MediaPipe indices; `BODY_CONNECTIONS` documents body-only drawing topology. Modest EMA smoothing uses a 45 ms time constant (75 ms for weaker reliable confidence). Velocity uses intervals 16–150 ms, suppresses >6 stage-units/s spikes and >0.25-stage displacement jumps, and seeds at zero after gaps, missing/occluded joints, mapping changes or reacquisition. Positions can still be smoothed through intervals up to 300 ms. There are no ball/game imports or camera requests inside the pose subsystem.
+
+### Browser regression check
+
+```sh
+npx playwright install chromium
+npm run test:browser
+```
+
+This builds and serves the production app on localhost with synthetic blank/toy Canvas streams. It verifies real worker initialization/inference, stream reuse, six-ball controls/settings, mirror/resize, no-person/staleness, hidden/resume, camera failure/recovery, model failure/retry, rapid toggles, stop/start, device end/pagehide, and starting Pose when main-canvas WebGL2 is unavailable. It also asserts one in-flight worker frame and same-origin GET-only traffic. For a person-detection check, pass `POSE_FIXTURE=/absolute/path/to/a/full-body-test.jpg`; Google's public test image is available at `https://storage.googleapis.com/mediapipe-assets/pose.jpg`. The fixture is read only for this local test and is not part of deployment. Optional `CHROMIUM_PATH` selects an existing browser, `POSE_MEASURE_SECONDS=30` lengthens each benchmark, and `POSE_SCREENSHOT=/absolute/path/pose.png` saves a synthetic mobile-stage screenshot. Unit tests cover mapping, reliability, freshness, smoothing, velocities and cancellation/backpressure separately.
+
+### Pixel 10 Pro XL acceptance check
+
+Use a production-like **HTTPS** preview reachable from the phone. This remains a real-device check; browser automation does not prove movement feel, thermals or phone performance.
+
+1. Rear camera, full-body view: raise arms separately/together, bend elbows, walk side to side, squat, lean, lift each knee and slowly extend a leg. Check responsiveness, proportions and jitter.
+2. Front camera: check horizontal mirror and arm identity. Switch rear/front, rotate portrait↔landscape, and check hands/feet alignment and fit.
+3. Leave view, obscure a limb, then return. Expect missing segments/no-person feedback and clean reacquisition. Hide the tab for several seconds and return; no frozen figure or velocity jump.
+4. Toggle Pose↔Green-screen while live; check scene/key choices, six ball types, toy hits and the above-frame arrow. Repeat stop/start; switch camera during inference and try a camera failure/recovery when practical.
+5. Open **Diagnostics → Pose check**. Log at least 30 seconds each of Pose with a figure and Green-screen baseline, optionally no-person Pose: rendered fps/frame interval, actual sample Hz, inference average, capture/round-trip cost, pose age, perceived lag and thermal/battery observations. Aim for a smooth stage near 30 fps and 15–20 Hz inference if achievable. Report actual rates/tradeoffs; logging metrics does not mean recording footage.
 
 ## Built-in scenes
 

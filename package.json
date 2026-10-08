@@ -4,14 +4,19 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "dev": "node scripts/verify-pose-assets.mjs && vite",
+    "build": "node scripts/verify-pose-assets.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:browser": "npm run build && node scripts/browser-pose-check.mjs"
   },
   "devDependencies": {
+    "playwright": "1.62.1",
     "typescript": "^5.8.3",
     "vite": "^7.0.0",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.1.0"
   }
 }

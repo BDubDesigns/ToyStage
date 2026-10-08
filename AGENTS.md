@@ -10,6 +10,8 @@ The initial setup uses a camera pointed at a green-screen play area. ToyStage re
 
 The first defining interaction is a virtual ball that can be hit by a physical toy or hand without requiring sensors in the toy or ML object recognition.
 
+Pose Mode is a separate local body-tracking view in the same app: one person drives a digital stick figure without a green screen or visible camera footage. It currently has no ball/gesture/game interactions.
+
 See GitHub issue #1 for the current MVP roadmap and implementation order.
 
 ## Product principles
@@ -26,7 +28,7 @@ See GitHub issue #1 for the current MVP roadmap and implementation order.
 
 These are current architectural invariants unless an issue explicitly changes them:
 
-- Use WebGL2 for the live video compositor and chroma-key pipeline.
+- Use WebGL2 for the Green-screen live video compositor and chroma-key pipeline. Pose has its own Canvas stage and worker; do not gate its camera acquisition on the main compositor's WebGL2 check.
 - DOM and Canvas may be used for controls, diagnostics, debug overlays, and other UI where appropriate.
 - Target a practical baseline of roughly 720p at 30 fps for the visible experience.
 - Do not process the full-resolution camera image with a per-frame JavaScript pixel loop.
@@ -73,10 +75,15 @@ The app uses npm, Vite, and TypeScript.
 - Run unit tests: `npm test`
 - Type-check and build: `npm run build`
 - Preview a production build: `npm run preview`
+- Production browser regression check: `npx playwright install chromium`, then `npm run test:browser` (synthetic input; see README for optional full-body fixture and browser path).
 
 Application code lives in `src/`; `index.html` is the Vite entry point. Camera acquisition and capability checks live in `src/camera.ts`. Use a secure context (HTTPS, or localhost) for camera testing. The Pixel's manual camera check needs an HTTPS URL reachable from the phone.
 
 Camera discovery and switching use `MediaDevices.enumerateDevices()` after permission is granted. The page retains one stream at a time: switching releases the old tracks, requests the selected device, and recreates the compositor with the new mirror state. Camera choices are session-only; labels may be absent or generic, so the UI gives those devices a stable order for that session. Key, scene, motion, and ball controls remain in page memory, while calibration and interaction history reset with renderer recreation. Do not infer camera hardware beyond browser-provided labels/settings or keep a second camera stream active.
+
+`src/main.ts` remains the only `activeStream`/camera-session owner. Green-screen/Pose selection is page-memory state; switching modes disposes the old stage and reuses the exact stream. `src/pose/pose-controller.ts` owns the single 30 fps Pose render RAF and decoded-frame sampling (rVFC, or that same RAF fallback). `PoseTracker` offers one proportional ≤512-long-edge ImageBitmap at a time, capped at 18 Hz, including async capture in backpressure. A module `pose-worker.ts` runs pinned `@mediapipe/tasks-vision` 1.1.0 / Lite float16 v1 / CPU / one pose / segmentation off. Same-origin assets live in `public/pose/`; `scripts/verify-pose-assets.mjs` checks package agreement and checksums during build. Preserve package/WASM/model pins together. No pose module may request a camera, import games/balls, upload frames or run synchronous inference on the main thread.
+
+Pose snapshots are deeply frozen: 33 ordered landmarks, raw unmirrored image coordinates/confidence, smoothed stage coordinates, derived per-joint reliability and pose usability, capture/completion/receive timestamps and stage-normalized velocities. Mapping uses `getCameraRect` with mirroring exactly once. Source timestamps are main `performance.now()` at bitmap capture start, not sensor exposure/media-time seconds; worker completion converts via time origins. Pose velocity units differ from ball shorter-edge units (see README). Missing confidence/occluded joints are inactive immediately; snapshots/history expire at 300 ms from capture. Resize, dimension change and visibility transitions invalidate history/results without freeing an outstanding frame slot early. A hidden Pose tab keeps its one worker loaded but stops all clocks/sampling and requires fresh input on resume. Stop/mode/device switch, worker failure and pagehide terminate the worker; late bitmap promises close locally. Unsupported/error states offer explicit retry, never main-thread inference fallback. `stick-figure-view.ts` draws only model-derived body geometry over a plain stage; actual camera pixels stay hidden.
 
 The stage's visible output is `#stage-canvas`, owned by `src/compositor.ts`. The hidden video is only a local texture source. The compositor draws the selected built-in scene followed by an alpha-blended, aspect-contained keyed camera layer with a small inset. `src/chroma-key-shader.ts` owns brightness-normalized chromaticity keying, feathering, green despill, and the optional visual cutout check. `src/chroma-key.ts` owns defaults and calibration mapping; user-triggered calibration reads only one temporary 5×5 video patch and bypasses keying while choosing. Settings live only in memory. `src/compositor-layout.ts` owns stage-normalized fitting and the portrait/landscape 720p drawing-buffer budget. Browser-decoded video dimensions determine orientation; user-facing mirroring happens in the camera shader and is reversed for sampling. Rendering is capped at 30 fps and pauses when the document is hidden. `start()` allocates GPU resources/listeners, `stop()` releases them, and `dispose()` permanently ends that renderer instance. The visual cutout check is only a display mode and does not affect interaction occupancy.
 
@@ -116,7 +123,7 @@ Therefore:
 
 ## Scope discipline
 
-The MVP does not require:
+The Green-screen MVP does not require:
 
 - ML toy recognition
 - identifying specific dolls, hands, or body parts
@@ -127,7 +134,7 @@ The MVP does not require:
 - a scene marketplace
 - a generalized creator platform
 
-The green-screen foreground itself should provide enough information to prove the first interaction model.
+The green-screen foreground itself should provide enough information to prove the first interaction model. Pose Mode's body landmarks are an explicitly scoped exception to identifying body parts, isolated from foreground sensing and ball play.
 
 ## Keeping this file useful
 

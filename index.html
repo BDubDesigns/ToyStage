@@ -33,11 +33,19 @@
             <p class="local-note"><span aria-hidden="true">●</span> Camera stays on this device</p>
           </div>
 
+          <div class="mode-picker" role="group" aria-label="Play mode">
+            <button id="mode-green" type="button" aria-pressed="true" aria-describedby="mode-help">Green-screen <small>Toys in a world</small></button>
+            <button id="mode-pose" type="button" aria-pressed="false" aria-describedby="mode-help">Pose <small>You move the figure</small></button>
+          </div>
+          <p id="mode-help" class="mode-help">A green blanket turns your toys into part of the scene.</p>
+
           <div class="stage-frame" id="stage-frame">
             <video id="stage-video" autoplay muted playsinline hidden aria-hidden="true"></video>
             <canvas id="stage-canvas" class="stage-canvas" hidden role="img" aria-label="Live keyed camera over a chosen scene"></canvas>
             <canvas id="sensing-overlay" class="sensing-overlay" hidden aria-hidden="true"></canvas>
             <canvas id="ball-overlay" class="ball-overlay" hidden aria-hidden="true"></canvas>
+            <canvas id="pose-canvas" class="stage-canvas" hidden role="img" aria-label="Digital stick figure following your body; camera image hidden"></canvas>
+            <div id="pose-prompt" class="pose-prompt" hidden role="status" aria-live="polite">Step back so your body is in view.</div>
             <div id="empty-state" class="empty-state">
               <div class="camera-glyph" aria-hidden="true">
                 <svg viewBox="0 0 48 40" fill="none">
@@ -50,7 +58,7 @@
               <p id="stage-message" role="status" aria-live="polite">Start the camera to bring your play space into ToyStage.</p>
             </div>
             <div id="live-overlay" class="live-overlay" hidden>
-              <span><span class="live-dot" aria-hidden="true"></span> LIVE PREVIEW</span>
+              <span><span class="live-dot" aria-hidden="true"></span> <span id="live-label">LIVE PREVIEW</span></span>
               <span>LOCAL ONLY</span>
             </div>
           </div>
@@ -63,7 +71,17 @@
             <p id="camera-switch-status" role="status" aria-live="polite"></p>
           </div>
 
-          <section class="ball-panel" aria-labelledby="ball-heading">
+          <section id="pose-panel" class="pose-panel" aria-labelledby="pose-heading" hidden>
+            <div class="key-heading-row">
+              <div><p class="eyebrow">MOVE YOUR WAY</p><h2 id="pose-heading">Meet your moving double</h2></div>
+              <span class="pose-badge">No green screen</span>
+            </div>
+            <p class="key-help">Prop up your phone and step back until it can see your head and feet. Raise an arm, lean, or try a squat. Your camera image stays hidden.</p>
+            <p id="pose-status" class="key-help" role="status" aria-live="polite">Start the camera when you have room to move.</p>
+            <button id="pose-retry" class="button button-secondary" type="button" hidden>Retry Pose Mode</button>
+          </section>
+
+          <section class="ball-panel" data-green-screen aria-labelledby="ball-heading">
             <div class="key-heading-row">
               <div><p class="eyebrow">TOY MEETS WORLD</p><h2 id="ball-heading">Give it a nudge</h2></div>
               <label class="toggle"><input id="ball-enabled" type="checkbox" checked /> Play ball</label>
@@ -78,7 +96,7 @@
             <p id="ball-status" class="key-help" role="status" aria-live="polite">8 Ball · Start the camera to play.</p>
           </section>
 
-          <section class="scene-panel" aria-labelledby="scene-heading">
+          <section class="scene-panel" data-green-screen aria-labelledby="scene-heading">
             <div class="key-heading-row">
               <div><p class="eyebrow">PICK A WORLD</p><h2 id="scene-heading">Where will you play?</h2></div>
               <label class="toggle"><input id="scene-motion" type="checkbox" checked disabled /> Animate space</label>
@@ -87,7 +105,7 @@
             <p id="scene-status" class="scene-status" role="status" aria-live="polite">Loading Enchanted Forest…</p>
           </section>
 
-          <section class="key-panel" aria-labelledby="key-heading">
+          <section class="key-panel" data-green-screen aria-labelledby="key-heading">
             <div class="key-heading-row">
               <div><p class="eyebrow">GREEN-SCREEN SETUP</p><h2 id="key-heading">Make the blanket disappear</h2></div>
               <label class="toggle"><input id="key-enabled" type="checkbox" checked /> Remove screen</label>
@@ -107,7 +125,7 @@
             <label class="toggle mask-toggle"><input id="show-mask" type="checkbox" /> Check cutout <span>White stays; black disappears.</span></label>
           </section>
 
-          <p class="stage-caption">Pick a world, then remove the blanket to put your toys inside it. You can switch worlds while the camera stays live.</p>
+          <p id="stage-caption" class="stage-caption">Pick a world, then remove the blanket to put your toys inside it. You can switch worlds while the camera stays live.</p>
         </section>
 
         <aside class="diagnostics" aria-labelledby="diagnostics-heading">
@@ -162,8 +180,21 @@
             </div>
           </dl>
 
-          <p class="privacy-note"><span aria-hidden="true">◉</span> Live camera frames are shown in your browser. ToyStage does not upload or save them.</p>
-          <details class="sensing-panel">
+          <p class="privacy-note"><span aria-hidden="true">◉</span> Camera processing stays in your browser. ToyStage does not upload or save frames.</p>
+          <details id="pose-diagnostics" class="sensing-panel" hidden>
+            <summary>Pose check</summary>
+            <dl class="diagnostic-list">
+              <div class="diagnostic-row"><dt>Worker / model</dt><dd id="pose-worker-state">Off · Lite / CPU</dd></div>
+              <div class="diagnostic-row"><dt>Usable poses / tracking</dt><dd id="pose-count">—</dd></div>
+              <div class="diagnostic-row"><dt>Sample size / actual rate</dt><dd id="pose-sample-rate">—</dd></div>
+              <div class="diagnostic-row"><dt>Inference average</dt><dd id="pose-inference-time">—</dd></div>
+              <div class="diagnostic-row"><dt>Capture / round trip average</dt><dd id="pose-capture-time">—</dd></div>
+              <div class="diagnostic-row"><dt>Pose age / freshness</dt><dd id="pose-age">—</dd></div>
+              <div class="diagnostic-row"><dt>Backpressure</dt><dd id="pose-backpressure">—</dd></div>
+            </dl>
+            <p class="key-help">One person, up to 18 samples/s. Low-visibility limbs disappear; fresh input is required within 300 ms. Round trip includes inference and worker scheduling.</p>
+          </details>
+          <details class="sensing-panel" data-green-screen>
             <summary>Interaction check</summary>
             <p class="key-help">See the solid areas that toys and hands will use for interaction.</p>
             <label class="toggle"><input id="sensing-enabled" type="checkbox" checked /> Sense foreground</label>

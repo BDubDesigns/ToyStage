@@ -17,8 +17,8 @@
 
 html, body, #app { width: 100%; min-width: 320px; min-height: 100%; margin: 0; }
 body { min-height: 100vh; min-height: 100dvh; }
-button, input { font: inherit; }
-button:focus-visible, a:focus-visible, input:focus-visible { outline: 3px solid var(--lime); outline-offset: 3px; }
+button, input, select { font: inherit; }
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--lime); outline-offset: 3px; }
 [hidden] { display: none !important; }
 
 .app-shell {
@@ -73,6 +73,19 @@ h1 { margin-bottom: 0; font-size: clamp(22px, 3vw, 30px); font-weight: 700; lett
 .stage-frame::before { top: 12px; left: 12px; border-width: 1px 0 0 1px; border-top-left-radius: 4px; }
 .stage-frame::after { right: 12px; bottom: 12px; border-width: 0 1px 1px 0; border-bottom-right-radius: 4px; }
 .stage-canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.mode-picker { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 5px; border: 1px solid var(--stroke); border-radius: 12px; background: #10191d; }
+.mode-picker button { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 5px 12px; min-height: 52px; border: 2px solid transparent; border-radius: 8px; color: #bac8c4; background: transparent; cursor: pointer; font-size: 13px; font-weight: 800; }
+.mode-picker button small { color: #98aaa7; font-size: 10px; font-weight: 500; }
+.mode-picker button[aria-pressed="true"] { border-color: var(--lime); color: #d8f9ab; background: #283326; }
+.mode-picker button[aria-pressed="true"] small { color: #bfccad; }
+.mode-help { min-height: 18px; margin: 10px 2px 14px; color: #aab5b2; font-size: 11px; line-height: 1.5; }
+.pose-panel { margin-top: 18px; padding: 18px; border: 1px solid #426157; border-radius: 12px; background: linear-gradient(135deg, #1e302d, #172329); }
+.pose-panel h2 { margin: 0; font-size: 18px; letter-spacing: -.025em; }
+.pose-badge { padding: 6px 9px; border: 1px solid #486052; border-radius: 20px; color: var(--lime); font-size: 10px; }
+.pose-prompt { position: absolute; z-index: 3; max-width: 85%; padding: 14px 20px; border: 1px solid #7d9b784d; border-radius: 12px; color: #e2f1de; background: #122127ee; text-align: center; font-size: 13px; line-height: 1.65; pointer-events: none; }
+.pose-panel [data-error="true"] { color: #ffb3a8; }
+@media (max-width: 760px) and (orientation: portrait) { .stage-frame[data-mode="pose"] { aspect-ratio: 3 / 4; min-height: 280px; max-height: 65dvh; } }
+@media (max-width: 440px) { .pose-panel { padding: 13px; } .mode-picker button { flex-direction: column; gap: 4px; } }
 .sensing-overlay { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; pointer-events: none; image-rendering: pixelated; }
 .ball-overlay { position: absolute; inset: 0; z-index: 2; width: 100%; height: 100%; pointer-events: none; }
 .ball-panel { margin-top: 18px; padding: 18px; border: 1px solid var(--stroke); border-radius: 12px; background: var(--surface); }
