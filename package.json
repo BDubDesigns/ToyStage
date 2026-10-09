@@ -4,11 +4,12 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "node scripts/verify-pose-assets.mjs && vite",
-    "build": "node scripts/verify-pose-assets.mjs && tsc --noEmit && vite build",
+    "dev": "node scripts/verify-pose-assets.mjs && node scripts/verify-benchmark-assets.mjs && vite",
+    "build": "node scripts/verify-pose-assets.mjs && node scripts/verify-benchmark-assets.mjs && tsc --noEmit && vite build",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:browser": "npm run build && node scripts/browser-pose-check.mjs"
+    "test:browser": "npm run build && node scripts/browser-pose-check.mjs",
+    "test:benchmark": "npm run build && node scripts/browser-benchmark-check.mjs"
   },
   "devDependencies": {
     "playwright": "1.62.1",
@@ -17,6 +18,10 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "@mediapipe/tasks-vision": "1.1.0"
+    "@mediapipe/tasks-vision": "1.1.0",
+    "@tensorflow-models/pose-detection": "2.1.3",
+    "@tensorflow/tfjs-backend-wasm": "4.22.0",
+    "@tensorflow/tfjs-converter": "4.22.0",
+    "@tensorflow/tfjs-core": "4.22.0"
   }
 }

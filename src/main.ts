@@ -23,6 +23,7 @@ import { drawBall, drawBallAppearance } from "./ball-view";
 import type { CameraRect } from "./compositor-layout";
 import { PoseController } from "./pose/pose-controller";
 import type { PoseStageDiagnostics } from "./pose/pose-controller";
+import { BenchmarkPanel } from "./pose/benchmark-panel";
 
 const cameraButton = getElement<HTMLButtonElement>("camera-button");
 const cameraState = getElement<HTMLElement>("camera-state");
@@ -62,6 +63,8 @@ const poseStatus = getElement<HTMLElement>("pose-status");
 const poseRetry = getElement<HTMLButtonElement>("pose-retry");
 const modeGreen = getElement<HTMLButtonElement>("mode-green");
 const modePose = getElement<HTMLButtonElement>("mode-pose");
+const benchmarkPanel = new URLSearchParams(location.search).get("pose-benchmark") === "1"
+  ? new BenchmarkPanel((model, update) => poseController?.runBenchmark(model, update), reason => poseController?.stopBenchmark(reason)) : null;
 
 const ball = new Ball();
 const ballEnabled = getElement<HTMLInputElement>("ball-enabled");
@@ -463,6 +466,7 @@ async function attachCameraStream(stream: MediaStream, attempt: AbortController,
 function stopActiveStage(): void {
   renderer?.dispose(); renderer = null;
   poseController?.dispose(); poseController = null;
+  benchmarkPanel?.setAvailable(mode === "pose", false);
   canvas.hidden = poseCanvas.hidden = posePrompt.hidden = true;
   sensingOverlay.hidden = ballOverlay.hidden = true;
   ball.pause();
@@ -476,6 +480,7 @@ function startActiveStage(track: MediaStreamTrack): void {
     poseCanvas.hidden = false;
     poseController = new PoseController(poseCanvas, video, shouldMirrorPreview(getCameraFacingMode(track)), updatePoseDiagnostics);
     poseController.start();
+    benchmarkPanel?.setAvailable(true, true);
     sampleButton.disabled = true;
     return;
   }
@@ -515,6 +520,7 @@ function selectMode(next: "green" | "pose"): void {
   getElement<HTMLElement>("stage-caption").textContent = mode === "pose" ? "One person at a time. Give yourself space, good light, and a full-body view." : "Pick a world, then remove the blanket to put your toys inside it. You can switch worlds while the camera stays live.";
   for (const panel of document.querySelectorAll<HTMLElement>("[data-green-screen]")) panel.hidden = mode === "pose";
   getElement<HTMLElement>("pose-panel").hidden = getElement<HTMLElement>("pose-diagnostics").hidden = mode !== "pose";
+  benchmarkPanel?.setAvailable(mode === "pose", Boolean(activeStream));
   updateBallControls();
   const track = activeStream?.getVideoTracks()[0];
   if (track && cameraState.dataset.state === "live") {
@@ -542,6 +548,13 @@ poseRetry.addEventListener("click", () => {
 
 function updatePoseDiagnostics(stats: PoseStageDiagnostics): void {
   if (mode !== "pose") return;
+  if (stats.benchmark) {
+    posePrompt.hidden = true; poseRetry.hidden = true;
+    poseStatus.textContent = "Local benchmark active. Follow the warmup and measurement timer below.";
+    getElement<HTMLElement>("pose-worker-state").textContent = `Benchmark · ${stats.backend}`;
+    renderRate.textContent = `${stats.fps.toFixed(1)} fps / 30 target · Benchmark`;
+    return;
+  }
   const frame = stats.frame;
   const usable = frame?.poses.find((pose) => pose.state !== "unusable");
   const failed = stats.state === "error" || stats.state === "unsupported";
