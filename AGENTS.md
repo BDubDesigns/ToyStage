@@ -66,6 +66,12 @@ The initial repository bootstrap commit may land directly on `main`. After that:
 - Do not rewrite unrelated architecture while completing a scoped issue.
 - If an implementation decision materially changes the architecture or workflow described here, update `AGENTS.md` in the same PR.
 
+### Large binary assets and publishing
+
+Prefer authenticated Git for binary assets. If this workspace has no CLI GitHub credentials, use the connected GitHub tools; verify uploaded blob SHAs and the final tree against the tested local tree. Avoid a long series of shell calls to encode tiny chunks. Read each file once where supported, and checkpoint successful uploads so a retry uploads only missing files.
+
+If an upload endpoint cannot accept a full binary, follow the existing Pose WASM pattern: commit ordered parts under `vendor/`, reconstruct the exact upstream file into `public/` in a dev/build verification script, record part order plus assembled byte length/SHA-256 in the asset manifest, and ignore the reconstructed file. Choose parts below the actual endpoint limit; do not repeatedly retry an oversized payload. `scripts/verify-pose-assets.mjs` and `public/pose/assets.json` are the reference implementation. Source-upload limits are separate from Cloudflare's **25 MiB per deployed file / 100 MiB total** budgets; splitting source parts does not make an oversized deployed file acceptable.
+
 ## Repository commands and structure
 
 The app uses npm, Vite, and TypeScript.
